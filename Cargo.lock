@@ -1394,7 +1394,7 @@ dependencies = [
 [[package]]
 name = "robo-planning"
 version = "0.1.0"
-source = "git+https://github.com/rsasaki0109/robo-planning?branch=claude%2Ffunny-meitner-xm37r1#2f58cd8812ce983309900f2fa235e4ab924d33de"
+source = "git+https://github.com/rsasaki0109/robot-planning?branch=main#631d34187d0d3498e5def50e8b69777954889ed6"
 dependencies = [
  "gif",
  "tiny-skia",

@@ -3,7 +3,7 @@
 Robot models, controllers and a deterministic simulator for comparing control
 laws **per robot body**: wheeled, quadruped, humanoid, arm, drone and
 cart-pole. Reference paths come from
-[robo-planning](https://github.com/rsasaki0109/robo-planning) (planning by task).
+[robo-planning](https://github.com/rsasaki0109/robot-planning) (planning by task).
 
 機体（車輪型・犬型・ヒューマノイド・アーム・ドローン・倒立振子）ごとに、
 合う制御則を同じタスクで比較シミュレーションするライブラリです。
