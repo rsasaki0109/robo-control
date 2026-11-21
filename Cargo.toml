@@ -1,0 +1,21 @@
+[package]
+name = "robo-control"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Controllers, robot models and a simulator for comparing control laws per robot type and task, driven by robo-planning plans."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rsasaki0109/robo-control"
+
+[lib]
+name = "robo_control"
+
+[dependencies]
+nalgebra = "0.33"
+robo-planning = { git = "https://github.com/rsasaki0109/robo-planning", branch = "claude/funny-meitner-xm37r1", features = ["render"] }
+
+[profile.dev]
+opt-level = 1
+
+[profile.test]
+opt-level = 2
