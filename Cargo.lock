@@ -1085,7 +1085,7 @@ checksum = "60a357793950651c4ed0f3f52338f53b2f809f32d83a07f72909fa13e4c6c1e3"
 [[package]]
 name = "rne_ai"
 version = "0.4.0"
-source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=926ef72#926ef7292b2da1be15f940126424069dde866bc5"
+source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=3ed43d0#3ed43d01d8686f15364423d1eea4009508c7859b"
 dependencies = [
  "bevy_ecs",
  "rne_assets",
@@ -1110,7 +1110,7 @@ dependencies = [
 [[package]]
 name = "rne_assets"
 version = "0.4.0"
-source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=926ef72#926ef7292b2da1be15f940126424069dde866bc5"
+source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=3ed43d0#3ed43d01d8686f15364423d1eea4009508c7859b"
 dependencies = [
  "rne_data",
  "rne_deformable",
@@ -1130,7 +1130,7 @@ dependencies = [
 [[package]]
 name = "rne_collision_bake"
 version = "0.4.0"
-source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=926ef72#926ef7292b2da1be15f940126424069dde866bc5"
+source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=3ed43d0#3ed43d01d8686f15364423d1eea4009508c7859b"
 dependencies = [
  "rne_math",
  "rne_physics",
@@ -1143,7 +1143,7 @@ dependencies = [
 [[package]]
 name = "rne_core"
 version = "0.4.0"
-source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=926ef72#926ef7292b2da1be15f940126424069dde866bc5"
+source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=3ed43d0#3ed43d01d8686f15364423d1eea4009508c7859b"
 dependencies = [
  "rne_math",
  "serde",
@@ -1153,7 +1153,7 @@ dependencies = [
 [[package]]
 name = "rne_data"
 version = "0.4.0"
-source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=926ef72#926ef7292b2da1be15f940126424069dde866bc5"
+source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=3ed43d0#3ed43d01d8686f15364423d1eea4009508c7859b"
 dependencies = [
  "rne_core",
  "rne_ecs",
@@ -1167,7 +1167,7 @@ dependencies = [
 [[package]]
 name = "rne_deformable"
 version = "0.4.0"
-source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=926ef72#926ef7292b2da1be15f940126424069dde866bc5"
+source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=3ed43d0#3ed43d01d8686f15364423d1eea4009508c7859b"
 dependencies = [
  "bevy_ecs",
  "rne_ecs",
@@ -1181,7 +1181,7 @@ dependencies = [
 [[package]]
 name = "rne_dynamics"
 version = "0.4.0"
-source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=926ef72#926ef7292b2da1be15f940126424069dde866bc5"
+source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=3ed43d0#3ed43d01d8686f15364423d1eea4009508c7859b"
 dependencies = [
  "rne_ecs",
  "rne_math",
@@ -1194,7 +1194,7 @@ dependencies = [
 [[package]]
 name = "rne_ecs"
 version = "0.4.0"
-source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=926ef72#926ef7292b2da1be15f940126424069dde866bc5"
+source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=3ed43d0#3ed43d01d8686f15364423d1eea4009508c7859b"
 dependencies = [
  "bevy_ecs",
  "serde",
@@ -1205,7 +1205,7 @@ dependencies = [
 [[package]]
 name = "rne_locomotion"
 version = "0.4.0"
-source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=926ef72#926ef7292b2da1be15f940126424069dde866bc5"
+source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=3ed43d0#3ed43d01d8686f15364423d1eea4009508c7859b"
 dependencies = [
  "rne_ai",
  "rne_dynamics",
@@ -1221,7 +1221,7 @@ dependencies = [
 [[package]]
 name = "rne_log"
 version = "0.4.0"
-source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=926ef72#926ef7292b2da1be15f940126424069dde866bc5"
+source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=3ed43d0#3ed43d01d8686f15364423d1eea4009508c7859b"
 dependencies = [
  "rne_core",
  "rne_data",
@@ -1236,7 +1236,7 @@ dependencies = [
 [[package]]
 name = "rne_math"
 version = "0.4.0"
-source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=926ef72#926ef7292b2da1be15f940126424069dde866bc5"
+source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=3ed43d0#3ed43d01d8686f15364423d1eea4009508c7859b"
 dependencies = [
  "glam",
  "serde",
@@ -1245,7 +1245,7 @@ dependencies = [
 [[package]]
 name = "rne_physics"
 version = "0.4.0"
-source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=926ef72#926ef7292b2da1be15f940126424069dde866bc5"
+source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=3ed43d0#3ed43d01d8686f15364423d1eea4009508c7859b"
 dependencies = [
  "bevy_ecs",
  "rne_core",
@@ -1259,7 +1259,7 @@ dependencies = [
 [[package]]
 name = "rne_physics_rapier"
 version = "0.4.0"
-source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=926ef72#926ef7292b2da1be15f940126424069dde866bc5"
+source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=3ed43d0#3ed43d01d8686f15364423d1eea4009508c7859b"
 dependencies = [
  "rapier3d",
  "rne_core",
@@ -1272,7 +1272,7 @@ dependencies = [
 [[package]]
 name = "rne_render"
 version = "0.4.0"
-source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=926ef72#926ef7292b2da1be15f940126424069dde866bc5"
+source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=3ed43d0#3ed43d01d8686f15364423d1eea4009508c7859b"
 dependencies = [
  "bevy_ecs",
  "gltf",
@@ -1291,7 +1291,7 @@ dependencies = [
 [[package]]
 name = "rne_robot"
 version = "0.4.0"
-source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=926ef72#926ef7292b2da1be15f940126424069dde866bc5"
+source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=3ed43d0#3ed43d01d8686f15364423d1eea4009508c7859b"
 dependencies = [
  "bevy_ecs",
  "rne_core",
@@ -1307,7 +1307,7 @@ dependencies = [
 [[package]]
 name = "rne_sensor"
 version = "0.4.0"
-source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=926ef72#926ef7292b2da1be15f940126424069dde866bc5"
+source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=3ed43d0#3ed43d01d8686f15364423d1eea4009508c7859b"
 dependencies = [
  "bevy_ecs",
  "rne_core",
@@ -1325,7 +1325,7 @@ dependencies = [
 [[package]]
 name = "rne_urdf_import"
 version = "0.4.0"
-source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=926ef72#926ef7292b2da1be15f940126424069dde866bc5"
+source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=3ed43d0#3ed43d01d8686f15364423d1eea4009508c7859b"
 dependencies = [
  "rne_collision_bake",
  "rne_core",
@@ -1342,7 +1342,7 @@ dependencies = [
 [[package]]
 name = "rne_wbc"
 version = "0.4.0"
-source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=926ef72#926ef7292b2da1be15f940126424069dde866bc5"
+source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=3ed43d0#3ed43d01d8686f15364423d1eea4009508c7859b"
 dependencies = [
  "rne_dynamics",
  "rne_ecs",
@@ -1356,7 +1356,7 @@ dependencies = [
 [[package]]
 name = "rne_world"
 version = "0.4.0"
-source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=926ef72#926ef7292b2da1be15f940126424069dde866bc5"
+source = "git+https://github.com/rsasaki0109/RobotNativeEngine?rev=3ed43d0#3ed43d01d8686f15364423d1eea4009508c7859b"
 dependencies = [
  "bevy_ecs",
  "petgraph 0.7.1",

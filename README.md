@@ -40,7 +40,7 @@ cargo run --release --example body_gallery humanoid     # one of: amr car quadru
 
 The same controllers also run on the full articulated robots of
 [Robot Native Engine](https://github.com/rsasaki0109/RobotNativeEngine) (RNE),
-in the `rne/` crate (`robo-control-rne`, RNE pinned to commit `926ef72`):
+in the `rne/` crate (`robo-control-rne`, RNE pinned to commit `3ed43d0` (main)):
 RNE's hard-contact floating-base dynamics (`rne_dynamics::contact_step`) is
 the plant, robo-control decides.
 
@@ -87,7 +87,7 @@ What carried over and what did not:
   where each foot actually landed (`LipmWalker::set_stance_position`),
   switching support on measured contact rather than on the clock, and a
   whole-body controller that keeps contact forces physical.
-- That last one was fixed in RNE itself (`926ef72`): `rne_wbc` used to solve
+- That last one was fixed in RNE itself ([#553](https://github.com/rsasaki0109/RobotNativeEngine/pull/553)): `rne_wbc` used to solve
   forces and accelerations unconstrained and project the forces onto the
   friction cones only afterwards, so its torques could assume a sole edge
   pulling on the ground; the G1 fell after 2.6 s with it. The new

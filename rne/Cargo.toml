@@ -11,12 +11,12 @@ publish = false
 robo-control = { path = ".." }
 nalgebra = "0.33"
 # RNE pinned to a commit so results are reproducible.
-rne_dynamics = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "926ef72" }
-rne_locomotion = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "926ef72" }
-rne_math = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "926ef72" }
-rne_physics = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "926ef72" }
-rne_urdf_import = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "926ef72" }
-rne_ecs = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "926ef72" }
-rne_robot = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "926ef72" }
-rne_world = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "926ef72" }
-rne_wbc = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "926ef72" }
+rne_dynamics = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "3ed43d0" }
+rne_locomotion = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "3ed43d0" }
+rne_math = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "3ed43d0" }
+rne_physics = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "3ed43d0" }
+rne_urdf_import = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "3ed43d0" }
+rne_ecs = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "3ed43d0" }
+rne_robot = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "3ed43d0" }
+rne_world = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "3ed43d0" }
+rne_wbc = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "3ed43d0" }

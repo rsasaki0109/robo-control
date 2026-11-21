@@ -202,7 +202,7 @@ pub struct SolePoint {
 /// consistent with those forces, and inverse dynamics gives the torques.
 ///
 /// Written before `rne_wbc` could constrain contact forces inside its solve
-/// (`enforce_contact_cones`, added in RNE `926ef72`); kept as an independent
+/// (`enforce_contact_cones`, added in RNE #553); kept as an independent
 /// cross-check. Without that option `rne_wbc` projects the forces onto the
 /// friction cones only after solving, so its torques can assume a sole edge
 /// pulling on the ground, which tips a flat-footed biped.
