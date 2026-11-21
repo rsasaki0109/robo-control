@@ -11,6 +11,7 @@
 //!   choose the CoM motion and footholds; RNE's whole-body controller
 //!   (`rne_wbc` with `enforce_contact_cones`) turns them into joint torques.
 
+pub mod fleet;
 pub mod g1;
 pub mod go2;
 

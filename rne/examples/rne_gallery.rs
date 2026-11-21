@@ -3,14 +3,14 @@
 //!
 //! ```bash
 //! cargo run --release -p robo-control-rne --example rne_gallery        # out/rne/{go2,g1}.gif + README.md
-//! cargo run --release -p robo-control-rne --example rne_gallery g1     # one of: go2 g1 go2_terrain g1_ramp
+//! cargo run --release -p robo-control-rne --example rne_gallery g1     # one of: go2 g1 go2_terrain g1_ramp fleet
 //! ```
 
 use robo_control::legged3d::{ConvexMpc3d, ForceController, PdForceQp};
 use robo_control::robo_planning::render::{colors, Canvas, GifWriter, Rgba, View};
 use robo_control::robo_planning::{Pose2, Vec2};
 use robo_control::scenarios::humanoid::{Strategy, PUSH};
-use robo_control_rne::{g1, go2};
+use robo_control_rne::{fleet, g1, go2};
 use std::fmt::Write as _;
 
 const OUT: &str = "out/rne";
@@ -260,6 +260,72 @@ fn g1_gif(runs: &[g1::G1Run], file: &str, heading: &str) -> std::io::Result<()> 
     Ok(())
 }
 
+fn fleet_gif(runs: &[fleet::FleetRun]) -> std::io::Result<()> {
+    let (w, h) = (900u32, 500u32);
+    let mut gif = GifWriter::create(format!("{OUT}/fleet.gif"), w, h)?;
+    let nf = runs.iter().map(|r| r.frames.len()).min().unwrap();
+    for fi in (0..nf).step_by(5) {
+        let mut c = Canvas::new(w, h);
+        title(&mut c, "4 RNE GO2S SWAP CORNERS (CONVEX MPC EACH)");
+        for (k, r) in runs.iter().enumerate() {
+            let x0 = 10.0 + k as f32 * 445.0;
+            let v = View::fit(Vec2::new(-2.6, -2.6), Vec2::new(2.6, 2.6), x0, 60.0, 435.0, 435.0);
+            c.rect_px(x0, 36.0, 435.0, 460.0, colors::WHITE);
+            for (i, p) in r.plans.iter().enumerate() {
+                c.polyline(&v, p, colors::series(i).alpha(70), 2.0);
+            }
+            for (i, g) in r.goals.iter().enumerate() {
+                let (gx, gy) = v.px(*g);
+                c.ring_px(gx, gy, fleet::RADIUS_M as f32 * v.scale(), colors::series(i), 1.5);
+            }
+            let f = &r.frames[fi];
+            for (i, b) in f.bases.iter().enumerate() {
+                let tr: Vec<Vec2> = r.frames[..=fi]
+                    .iter()
+                    .step_by(5)
+                    .map(|g| Vec2::new(g.bases[i][0], g.bases[i][1]))
+                    .collect();
+                c.polyline(&v, &tr, colors::series(i), 1.5);
+                let (bx, by) = v.px(Vec2::new(b[0], b[1]));
+                c.ring_px(
+                    bx,
+                    by,
+                    fleet::RADIUS_M as f32 * v.scale(),
+                    colors::series(i).alpha(120),
+                    1.0,
+                );
+                c.oriented_box(&v, Pose2::new(b[0], b[1], 0.0), 0.7, 0.31, colors::series(i));
+            }
+            // closest pair right now
+            let mut gap = f64::INFINITY;
+            for i in 0..f.bases.len() {
+                for j in i + 1..f.bases.len() {
+                    gap = gap.min(
+                        (f.bases[i][0] - f.bases[j][0]).hypot(f.bases[i][1] - f.bases[j][1]) - 2.0 * fleet::RADIUS_M,
+                    );
+                }
+            }
+            let m = |key: &str| r.metrics.iter().find(|(k2, _)| k2 == key).map_or(f64::NAN, |(_, v)| *v);
+            c.label(x0 + 8.0, 42.0, &r.name.to_uppercase(), 1.6, colors::INK);
+            c.label(
+                x0 + 8.0,
+                474.0,
+                &format!(
+                    "T {:.1} S  GAP NOW {:+.2} M  MIN {:.2} M  DONE {:.1} S",
+                    f.t,
+                    gap,
+                    m("min_separation_m"),
+                    m("all_arrived_s")
+                ),
+                1.4,
+                colors::INK,
+            );
+        }
+        gif.frame(&c, 6)?;
+    }
+    Ok(())
+}
+
 fn main() -> std::io::Result<()> {
     let only: Vec<String> = std::env::args().skip(1).collect();
     let on = |n: &str| only.is_empty() || only.iter().any(|o| o == n);
@@ -341,6 +407,15 @@ fn main() -> std::io::Result<()> {
             .map(|r| (format!("{} (ramp, push)", r.name), r.metrics.clone()))
             .collect();
         let _ = writeln!(md, "## g1 ramp\n\n{}", table(&rows));
+    }
+    if on("fleet") {
+        let runs = vec![
+            fleet::corner_swap(fleet::FleetMethod::Rvo, 22.0),
+            fleet::corner_swap(fleet::FleetMethod::Prioritized, 22.0),
+        ];
+        fleet_gif(&runs)?;
+        let rows: Vec<_> = runs.iter().map(|r| (r.name.clone(), r.metrics.clone())).collect();
+        let _ = writeln!(md, "## fleet\n\n{}", table(&rows));
     }
     std::fs::create_dir_all(OUT)?;
     std::fs::write(format!("{OUT}/README.md"), &md)?;

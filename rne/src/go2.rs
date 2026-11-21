@@ -119,84 +119,167 @@ fn rotation(q: rne_math::Quat) -> Rotation3<f64> {
     UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(q.w, q.x, q.y, q.z)).to_rotation_matrix()
 }
 
-/// Runs the Go2 under `controller`.
-pub fn run(controller: &mut dyn ForceController, cfg: &Go2Config) -> Go2Run {
-    let quadruped = Arc::new(Quadruped::go2().expect("Go2 model"));
-    let floor = if cfg.terrain_amplitude_m > 0.0 {
-        FractalTerrain {
-            size_x_m: 16.0,
-            size_z_m: 16.0,
-            columns: 161,
-            rows: 161,
-            frequency_per_m: 1.5,
-            amplitude_m: cfg.terrain_amplitude_m,
-            octaves: 3,
-            step_m: cfg.terrain_step_m,
-            ..FractalTerrain::default()
-        }
-        .height_field(7)
-        .expect("terrain")
-    } else {
-        FractalTerrain {
-            size_x_m: 60.0,
-            size_z_m: 60.0,
-            columns: 5,
-            rows: 5,
-            amplitude_m: 0.0,
-            ..FractalTerrain::default()
-        }
-        .height_field(0)
-        .expect("flat floor")
-    };
-    let terrain = floor.clone();
-    let ground = move |x: f64, y: f64| -> f64 {
-        let h = rne_locomotion::go2_learning::terrain_height_m(&terrain, x, y);
-        if h.is_finite() {
-            h
+/// Measurements of one 2 ms step of a [`Go2Sim`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Go2Tick {
+    /// time at the start of the step [s]
+    pub t: f64,
+    /// CoM [m]
+    pub com: Vector3<f64>,
+    /// commanded CoM height [m]
+    pub height_cmd_m: f64,
+    /// base velocity [m/s]
+    pub velocity_mps: Vector3<f64>,
+    /// roll, pitch [rad]
+    pub roll_pitch_rad: [f64; 2],
+}
+
+/// One Go2 on RNE driven step by step with a velocity command: the force
+/// controller carries the body, swing legs land at Raibert footholds. The robot
+/// stands for the first second and then trots.
+pub struct Go2Sim<'a> {
+    controller: &'a mut dyn ForceController,
+    cfg: Go2Config,
+    quadruped: Arc<Quadruped>,
+    sim: QuadrupedTerrainSim,
+    ground: Box<dyn Fn(f64, f64) -> f64>,
+    joint_links: Vec<[usize; 2]>,
+    k: usize,
+    liftoff: [Vector3<f64>; 4],
+    touchdown: [Vector3<f64>; 4],
+    prev_stance: [bool; 4],
+    forces: [Vector3<f64>; 4],
+    feet: [Vector3<f64>; 4],
+    stance: [bool; 4],
+    fell: Option<f64>,
+}
+
+impl std::fmt::Debug for Go2Sim<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Go2Sim")
+            .field("t", &self.time_s())
+            .field("fell", &self.fell)
+            .finish()
+    }
+}
+
+impl<'a> Go2Sim<'a> {
+    /// Standing Go2 at `(x, y)` facing +x.
+    pub fn new(controller: &'a mut dyn ForceController, cfg: Go2Config, start_xy: [f64; 2]) -> Self {
+        let quadruped = Arc::new(Quadruped::go2().expect("Go2 model"));
+        let floor = if cfg.terrain_amplitude_m > 0.0 {
+            FractalTerrain {
+                size_x_m: 16.0,
+                size_z_m: 16.0,
+                columns: 161,
+                rows: 161,
+                frequency_per_m: 1.5,
+                amplitude_m: cfg.terrain_amplitude_m,
+                octaves: 3,
+                step_m: cfg.terrain_step_m,
+                ..FractalTerrain::default()
+            }
+            .height_field(7)
+            .expect("terrain")
         } else {
-            0.0
+            FractalTerrain {
+                size_x_m: 60.0,
+                size_z_m: 60.0,
+                columns: 5,
+                rows: 5,
+                amplitude_m: 0.0,
+                ..FractalTerrain::default()
+            }
+            .height_field(0)
+            .expect("flat floor")
+        };
+        let terrain = floor.clone();
+        let ground = Box::new(move |x: f64, y: f64| -> f64 {
+            let h = rne_locomotion::go2_learning::terrain_height_m(&terrain, x, y);
+            if h.is_finite() {
+                h
+            } else {
+                0.0
+            }
+        });
+        let sim_cfg = TerrainSimConfig {
+            step_time_s: 0.002,
+            position_gain_nm_rad: 40.0,
+            velocity_gain_nm_s_rad: 1.5,
+            friction_coefficient: 0.8,
+            ..TerrainSimConfig::default()
+        };
+        let mut sim = QuadrupedTerrainSim::new(quadruped.clone(), floor, sim_cfg).expect("sim");
+        if start_xy != [0.0, 0.0] {
+            sim.reset_standing(start_xy[0], start_xy[1], 0.0).expect("reset");
         }
-    };
-    let sim_cfg = TerrainSimConfig {
-        step_time_s: 0.002,
-        position_gain_nm_rad: 40.0,
-        velocity_gain_nm_s_rad: 1.5,
-        friction_coefficient: 0.8,
-        ..TerrainSimConfig::default()
-    };
-    let mut sim = QuadrupedTerrainSim::new(quadruped.clone(), floor, sim_cfg).expect("sim");
-    let gait = Trot { period_s: cfg.period_s };
-    let legs = *quadruped.legs();
-    let model = quadruped.model();
-    let names = [
-        ["FL_hip", "FL_calf"],
-        ["FR_hip", "FR_calf"],
-        ["RL_hip", "RL_calf"],
-        ["RR_hip", "RR_calf"],
-    ];
-    let link_index = |n: &str| {
-        let e = model.kinematic().link_entity_by_name(n).expect("link");
-        model.kinematic().link_index(e).expect("index")
-    };
-    let joint_links: Vec<[usize; 2]> = names.iter().map(|[h, k]| [link_index(h), link_index(k)]).collect();
-    let foot_r = quadruped.foot_radius_m();
-    let dt = 0.002;
-    let steps = (cfg.duration_s / dt).round() as usize;
-    let ctrl_every = (cfg.control_dt_s / dt).round().max(1.0) as usize;
-    let mut liftoff = [Vector3::zeros(); 4];
-    let mut touchdown = [Vector3::zeros(); 4];
-    let mut prev_stance = [true; 4];
-    let mut forces = [Vector3::zeros(); 4];
-    let mut frames = Vec::new();
-    let mut fell = None;
-    let (mut ev, mut eh, mut eatt) = (Vec::new(), Vec::new(), Vec::new());
-    let com_off = na(quadruped.stand_com_m());
-    for k in 0..steps {
-        let t = k as f64 * dt;
+        let model = quadruped.model();
+        let link_index = |n: &str| {
+            let e = model.kinematic().link_entity_by_name(n).expect("link");
+            model.kinematic().link_index(e).expect("index")
+        };
+        let joint_links = [
+            ["FL_hip", "FL_calf"],
+            ["FR_hip", "FR_calf"],
+            ["RL_hip", "RL_calf"],
+            ["RR_hip", "RR_calf"],
+        ]
+        .iter()
+        .map(|[h, k]| [link_index(h), link_index(k)])
+        .collect();
+        Self {
+            controller,
+            cfg,
+            quadruped,
+            sim,
+            ground,
+            joint_links,
+            k: 0,
+            liftoff: [Vector3::zeros(); 4],
+            touchdown: [Vector3::zeros(); 4],
+            prev_stance: [true; 4],
+            forces: [Vector3::zeros(); 4],
+            feet: [Vector3::zeros(); 4],
+            stance: [true; 4],
+            fell: None,
+        }
+    }
+
+    /// Simulation time [s].
+    pub fn time_s(&self) -> f64 {
+        self.k as f64 * 0.002
+    }
+
+    /// Time of the fall, if any.
+    pub fn fell_at_s(&self) -> Option<f64> {
+        self.fell
+    }
+
+    /// Base position and velocity in the world (z up).
+    pub fn base(&self) -> (Vector3<f64>, Vector3<f64>) {
+        let bs = self.sim.base_state();
+        (na(bs.position_m), na(bs.linear_velocity_m_s))
+    }
+
+    /// Controller name.
+    pub fn controller_name(&self) -> String {
+        self.controller.name().to_string()
+    }
+
+    /// Advances 2 ms with world velocity command `v_cmd` and a push on the base.
+    pub fn step(&mut self, v_cmd: [f64; 2], push: Vec3) -> Go2Tick {
+        let cfg = self.cfg;
+        let dt = 0.002;
+        let ctrl_every = (cfg.control_dt_s / dt).round().max(1.0) as usize;
+        let gait = Trot { period_s: cfg.period_s };
+        let legs = *self.quadruped.legs();
+        let foot_r = self.quadruped.foot_radius_m();
+        let com_off = na(self.quadruped.stand_com_m());
+        let t = self.time_s();
         let walking = t >= 1.0;
         let gt = t - 1.0;
         let stance = if walking { gait.stance(gt) } else { [true; 4] };
-        let bs = sim.base_state();
+        let bs = self.sim.base_state();
         let r = rotation(bs.rotation);
         let base = na(bs.position_m);
         let com = base + r * com_off;
@@ -206,41 +289,44 @@ pub fn run(controller: &mut dyn ForceController, cfg: &Go2Config) -> Go2Run {
             rotation: r,
             omega_radps: na(bs.angular_velocity_rad_s),
         };
-        let feet_c: Vec<Vector3<f64>> = quadruped
-            .foot_centers_m(sim.q())
+        let feet_c: Vec<Vector3<f64>> = self
+            .quadruped
+            .foot_centers_m(self.sim.q())
             .expect("feet")
             .into_iter()
             .map(na)
             .collect();
         let feet: [Vector3<f64>; 4] = std::array::from_fn(|i| feet_c[i] - Vector3::new(0.0, 0.0, foot_r));
-        let v_cmd = speed_command(t);
+        let ground = &self.ground;
+        // ride at the nominal height above the ground under the feet
+        let ground_mean = feet.iter().map(|f| ground(f.x, f.y)).sum::<f64>() / 4.0;
         let cmd = SrbCommand {
             velocity_mps: v_cmd,
-            height_m: cfg.height_m,
+            height_m: ground_mean + cfg.height_m,
             yaw_rad: 0.0,
             yaw_rate_radps: 0.0,
         };
         // swing planning
         let left = if walking { gait.phase_left_s(gt) } else { 1.0 };
         for i in 0..4 {
-            if !stance[i] && prev_stance[i] {
-                liftoff[i] = feet[i];
+            if !stance[i] && self.prev_stance[i] {
+                self.liftoff[i] = feet[i];
             }
             if !stance[i] {
                 let hip_now = base + r * na(legs[i].hip_offset_m) + Vector3::new(0.0, legs[i].thigh_offset_y_m, 0.0);
                 let hip_td = hip_now + state.velocity_mps * left;
                 let mut td = raibert_foothold(hip_td, state.velocity_mps, v_cmd, cfg.period_s / 2.0, 0.06, 0.0);
                 td.z = ground(td.x, td.y);
-                touchdown[i] = td;
+                self.touchdown[i] = td;
             }
         }
-        prev_stance = stance;
-        if fell.is_none() && k % ctrl_every == 0 {
-            let nh = controller.horizon();
-            let hdt = controller.horizon_dt_s();
+        self.prev_stance = stance;
+        if self.fell.is_none() && self.k.is_multiple_of(ctrl_every) {
+            let nh = self.controller.horizon();
+            let hdt = self.controller.horizon_dt_s();
             let plan = ContactPlan {
                 feet_m: feet,
-                touchdown_m: std::array::from_fn(|i| if stance[i] { feet[i] } else { touchdown[i] }),
+                touchdown_m: std::array::from_fn(|i| if stance[i] { feet[i] } else { self.touchdown[i] }),
                 stance: (0..nh.max(1))
                     .map(|j| {
                         if !walking {
@@ -256,11 +342,11 @@ pub fn run(controller: &mut dyn ForceController, cfg: &Go2Config) -> Go2Run {
                     .collect(),
                 phase_left_s: [if walking { left } else { 1.0 - t }; 4],
             };
-            forces = controller.forces(&state, &cmd, &plan);
+            self.forces = self.controller.forces(&state, &cmd, &plan);
         }
         // joint command
-        let jq = sim.joint_positions_rad().to_vec();
-        let jqd = sim.joint_velocities_rad_s().to_vec();
+        let jq = self.sim.joint_positions_rad().to_vec();
+        let jqd = self.sim.joint_velocities_rad_s().to_vec();
         let mut pos = jq.clone();
         let mut vel = jqd.clone();
         let mut ff = vec![0.0; jq.len()];
@@ -269,90 +355,123 @@ pub fn run(controller: &mut dyn ForceController, cfg: &Go2Config) -> Go2Run {
             let jn = legs[i].joints;
             let angles = [jq[jn[0]], jq[jn[1]], jq[jn[2]]];
             if stance[i] {
-                let fb = r.inverse() * forces[i];
-                let tau = quadruped.leg_force_torques(i, angles, rv(fb));
+                let fb = r.inverse() * self.forces[i];
+                let tau = self.quadruped.leg_force_torques(i, angles, rv(fb));
                 for a in 0..3 {
                     ff[jn[a]] = tau[a];
                 }
             } else {
                 let u = 0.5 - 0.5 * (std::f64::consts::PI * swing_s).cos();
-                let mut target = liftoff[i] + (touchdown[i] - liftoff[i]) * u;
-                target.z = liftoff[i].z
-                    + (touchdown[i].z - liftoff[i].z) * u
+                let mut target = self.liftoff[i] + (self.touchdown[i] - self.liftoff[i]) * u;
+                target.z = self.liftoff[i].z
+                    + (self.touchdown[i].z - self.liftoff[i].z) * u
                     + foot_r
                     + cfg.swing_height_m * (std::f64::consts::PI * swing_s).sin();
                 let foot_base = r.inverse() * (target - base);
-                let ang = quadruped.leg_inverse_kinematics(i, rv(foot_base));
+                let ang = self.quadruped.leg_inverse_kinematics(i, rv(foot_base));
                 for a in 0..3 {
                     pos[jn[a]] = ang[a];
                     vel[jn[a]] = 0.0;
                 }
             }
         }
-        let push = if cfg.pushes { push_force(t) } else { Vec3::ZERO };
-        if fell.is_none() {
-            sim.step(
-                &JointCommand {
-                    positions_rad: pos,
-                    velocities_rad_s: vel,
-                    feedforward_nm: ff,
-                },
-                push,
-            )
-            .expect("step");
+        if self.fell.is_none() {
+            self.sim
+                .step(
+                    &JointCommand {
+                        positions_rad: pos,
+                        velocities_rad_s: vel,
+                        feedforward_nm: ff,
+                    },
+                    push,
+                )
+                .expect("step");
             let (roll, pitch, _) = r.euler_angles();
             if base.z - ground(base.x, base.y) < 0.15 || roll.abs() > 0.8 || pitch.abs() > 0.8 {
-                fell = Some(t);
+                self.fell = Some(t);
             }
         }
+        self.feet = feet;
+        self.stance = stance;
+        self.k += 1;
+        let (roll, pitch, _) = r.euler_angles();
+        Go2Tick {
+            t,
+            com,
+            height_cmd_m: cmd.height_m,
+            velocity_mps: state.velocity_mps,
+            roll_pitch_rad: [roll, pitch],
+        }
+    }
+
+    /// Drawing frame of the state at the start of the last step.
+    pub fn frame(&self, tick: &Go2Tick, v_cmd_x: f64, push: Vec3) -> Go2Frame {
+        let model = self.quadruped.model();
+        let kin = model.kinematic().forward_kinematics(self.sim.q()).expect("fk");
+        let tr = kin.transforms();
+        let bs = self.sim.base_state();
+        let base = na(bs.position_m);
+        let (roll, pitch, yaw) = rotation(bs.rotation).euler_angles();
+        let ground = &self.ground;
+        Go2Frame {
+            t: tick.t,
+            base_m: [base.x, base.y, base.z],
+            rpy_rad: [roll, pitch, yaw],
+            velocity_mps: [tick.velocity_mps.x, tick.velocity_mps.y, tick.velocity_mps.z],
+            v_cmd_mps: v_cmd_x,
+            legs: std::array::from_fn(|i| {
+                let h = tr[self.joint_links[i][0]].translation;
+                let kn = tr[self.joint_links[i][1]].translation;
+                let f = self.feet[i];
+                [[h.x, h.y, h.z], [kn.x, kn.y, kn.z], [f.x, f.y, f.z]]
+            }),
+            forces_n: std::array::from_fn(|i| {
+                if self.stance[i] {
+                    [self.forces[i].x, self.forces[i].y, self.forces[i].z]
+                } else {
+                    [0.0; 3]
+                }
+            }),
+            stance: self.stance,
+            push_n: [push.x, push.y, push.z],
+            ground: (0..=40)
+                .map(|j| {
+                    let x = base.x - 1.0 + 0.05 * j as f64;
+                    [x, ground(x, base.y)]
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Runs the Go2 under `controller`.
+pub fn run(controller: &mut dyn ForceController, cfg: &Go2Config) -> Go2Run {
+    let mut g = Go2Sim::new(controller, *cfg, [0.0, 0.0]);
+    let steps = (cfg.duration_s / 0.002).round() as usize;
+    let mut frames = Vec::new();
+    let (mut ev, mut eh, mut eatt) = (Vec::new(), Vec::new(), Vec::new());
+    for k in 0..steps {
+        let t = g.time_s();
+        let v_cmd = speed_command(t);
+        let push = if cfg.pushes { push_force(t) } else { Vec3::ZERO };
+        let tick = g.step(v_cmd, push);
         if t >= 1.5 {
-            ev.push(state.velocity_mps.x - v_cmd[0]);
-            eh.push(com.z - cmd.height_m);
-            let (roll, pitch, _) = r.euler_angles();
-            eatt.push(roll.hypot(pitch));
+            ev.push(tick.velocity_mps.x - v_cmd[0]);
+            eh.push(tick.com.z - tick.height_cmd_m);
+            eatt.push(tick.roll_pitch_rad[0].hypot(tick.roll_pitch_rad[1]));
         }
         if k % 5 == 0 {
-            let kin = model.kinematic().forward_kinematics(sim.q()).expect("fk");
-            let tr = kin.transforms();
-            let (roll, pitch, yaw) = r.euler_angles();
-            frames.push(Go2Frame {
-                t,
-                base_m: [base.x, base.y, base.z],
-                rpy_rad: [roll, pitch, yaw],
-                velocity_mps: [state.velocity_mps.x, state.velocity_mps.y, state.velocity_mps.z],
-                v_cmd_mps: v_cmd[0],
-                legs: std::array::from_fn(|i| {
-                    let h = tr[joint_links[i][0]].translation;
-                    let kn = tr[joint_links[i][1]].translation;
-                    let f = feet[i];
-                    [[h.x, h.y, h.z], [kn.x, kn.y, kn.z], [f.x, f.y, f.z]]
-                }),
-                forces_n: std::array::from_fn(|i| {
-                    if stance[i] {
-                        [forces[i].x, forces[i].y, forces[i].z]
-                    } else {
-                        [0.0; 3]
-                    }
-                }),
-                stance,
-                push_n: [push.x, push.y, push.z],
-                ground: (0..=40)
-                    .map(|j| {
-                        let x = base.x - 1.0 + 0.05 * j as f64;
-                        [x, ground(x, base.y)]
-                    })
-                    .collect(),
-            });
+            frames.push(g.frame(&tick, v_cmd[0], push));
         }
     }
     let rms = robo_control::metrics::rms;
     let last = frames.last().unwrap();
     Go2Run {
-        name: controller.name().to_string(),
+        name: g.controller_name(),
         frames: frames.clone(),
-        fell_at_s: fell,
+        fell_at_s: g.fell_at_s(),
         metrics: vec![
-            ("fell".into(), if fell.is_some() { 1.0 } else { 0.0 }),
+            ("fell".into(), if g.fell_at_s().is_some() { 1.0 } else { 0.0 }),
             ("rms_speed_err_mps".into(), rms(&ev)),
             ("rms_height_err_m".into(), rms(&eh)),
             ("rms_tilt_rad".into(), rms(&eatt)),

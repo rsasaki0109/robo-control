@@ -1,6 +1,6 @@
 //! Each body's scenario must reproduce its headline result.
 
-use robo_control::scenarios::{arm, cartpole, drone, humanoid, quadruped, wheeled};
+use robo_control::scenarios::{arm, cartpole, drone, humanoid, parking, quadruped, wheeled};
 
 #[test]
 fn amr_controllers_track_and_mpc_is_tightest() {
@@ -82,4 +82,16 @@ fn humanoid_both_walk_but_only_dcm_stepping_recovers_from_push() {
     let r = humanoid::push_recovery();
     assert!(r[0].fell_at_s.is_some(), "fixed footsteps should not survive the push");
     assert!(r[1].fell_at_s.is_none(), "step adjustment should recover");
+}
+
+#[test]
+fn parallel_parking_with_cusps_mpc_parks_cleanly() {
+    let r = parking::parallel_park();
+    assert!(r.reference.iter().any(|p| p.v_mps < 0.0), "plan has no reverse segment");
+    let mpc = r.runs.iter().find(|x| x.name == "LTV-MPC").unwrap();
+    assert!(mpc.metric("final_pos_err_m") < 0.2);
+    assert!(mpc.metric("final_yaw_err_deg") < 8.0);
+    assert_eq!(mpc.metric("contact_steps"), 0.0);
+    let pp = r.runs.iter().find(|x| x.name.starts_with("pure pursuit")).unwrap();
+    assert_eq!(pp.metric("contact_steps"), 0.0);
 }

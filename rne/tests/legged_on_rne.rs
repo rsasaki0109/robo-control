@@ -67,3 +67,15 @@ fn g1_dcm_walks_up_the_ramp_through_the_push() {
     assert!(f.com[0] > 2.0, "did not reach the top: {}", f.com[0]);
     assert!(f.points[0][2] > 0.75, "pelvis did not rise with the ramp");
 }
+
+#[test]
+fn four_go2s_swap_corners_with_both_fleet_methods() {
+    use robo_control_rne::fleet::{corner_swap, FleetMethod};
+    for m in [FleetMethod::Rvo, FleetMethod::Prioritized] {
+        let r = corner_swap(m, 22.0);
+        let v = |k: &str| r.metrics.iter().find(|(n, _)| n == k).unwrap().1;
+        assert!(v("min_separation_m") > 0.0, "{}: robots overlapped", r.name);
+        assert!(v("all_arrived_s") < 21.0, "{}: not all arrived", r.name);
+        assert_eq!(v("fallen"), 0.0);
+    }
+}

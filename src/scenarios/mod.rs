@@ -5,6 +5,7 @@ pub mod arm;
 pub mod cartpole;
 pub mod drone;
 pub mod humanoid;
+pub mod parking;
 pub mod quadruped;
 pub mod wheeled;
 

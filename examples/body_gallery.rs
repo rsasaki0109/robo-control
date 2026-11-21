@@ -4,10 +4,10 @@
 //!
 //! ```bash
 //! cargo run --release --example body_gallery            # all -> out/bodies/*.gif + README.md
-//! cargo run --release --example body_gallery humanoid   # just one
+//! cargo run --release --example body_gallery humanoid   # just one (amr car parking quadruped humanoid arm drone cartpole)
 //! ```
 
-use robo_control::scenarios::{self, arm, cartpole, drone, humanoid, quadruped, wheeled, Run};
+use robo_control::scenarios::{self, arm, cartpole, drone, humanoid, parking, quadruped, wheeled, Run};
 use robo_control::sim::Log;
 use robo_planning::render::{colors, Canvas, GifWriter, Rgba, View};
 use robo_planning::{Pose2, Vec2};
@@ -123,6 +123,67 @@ fn wheeled_gif(res: &wheeled::WheeledResult, name: &str, heading: &str, car: boo
             legend(&mut c, 14.0, 44.0, &rows);
             c.text(w as f32 - 130.0, 46.0, &format!("T {t:4.1} S"), 1.5, colors::INK);
         }
+        gif.frame(&c, DELAY)?;
+    }
+    Ok(())
+}
+
+fn parking_gif(res: &parking::ParkingResult) -> std::io::Result<()> {
+    let (w, h) = (860u32, 480u32);
+    let mut gif = GifWriter::create(format!("{OUT}/parking.gif"), w, h)?;
+    let v = View::fit(res.map.min, res.map.max, 10.0, 40.0, 840.0, 430.0);
+    let t_end = *res.runs[0].log.t.last().unwrap();
+    let n = 140;
+    let rows: Vec<(String, Rgba)> = res
+        .runs
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            (
+                format!(
+                    "{} END {:.2} M {:.0} DEG",
+                    short(&r.name),
+                    r.metric("final_pos_err_m"),
+                    r.metric("final_yaw_err_deg")
+                ),
+                colors::series(i),
+            )
+        })
+        .collect();
+    for f in 0..=n + 10 {
+        let t = t_end * f.min(n) as f64 / n as f64;
+        let mut c = Canvas::new(w, h);
+        title(&mut c, "PARALLEL PARKING WITH CUSPS: TRACKING FORWARD AND REVERSE");
+        c.map(&v, &res.map);
+        for w2 in res.reference.windows(2) {
+            let col = if w2[0].v_mps < 0.0 || w2[1].v_mps < 0.0 {
+                colors::RED
+            } else {
+                colors::GREY
+            };
+            c.polyline(
+                &v,
+                &[Vec2::new(w2[0].p.x, w2[0].p.y), Vec2::new(w2[1].p.x, w2[1].p.y)],
+                col,
+                3.0,
+            );
+        }
+        c.arrow(&v, res.goal, 2.5, colors::GREEN, 2.5);
+        for (i, r) in res.runs.iter().enumerate() {
+            let x = &r.log.x[at(&r.log, t)];
+            let centre = Pose2::new(x[0] + 1.0 * x[2].cos(), x[1] + 1.0 * x[2].sin(), x[2]);
+            c.oriented_box(&v, centre, 4.0, 1.8, colors::series(i).alpha(150));
+            c.polyline(&v, &trail(&r.log, t, 0, 1), colors::series(i), 1.5);
+        }
+        let reversing = robo_control::robo_planning::trajectory::sample_traj(&res.reference, t).v_mps < 0.0;
+        c.label(
+            w as f32 - 160.0,
+            44.0,
+            if reversing { "REVERSE" } else { "FORWARD" },
+            2.2,
+            if reversing { colors::RED } else { colors::INK },
+        );
+        legend(&mut c, 14.0, 44.0, &rows);
         gif.frame(&c, DELAY)?;
     }
     Ok(())
@@ -573,6 +634,11 @@ fn main() -> std::io::Result<()> {
         let r = wheeled::car_course();
         wheeled_gif(&r, "car", "CAR UP TO 12 M/S: 6 TRACKING CONTROLLERS", true)?;
         let _ = writeln!(md, "## car\n\n{}", scenarios::table(&r.runs));
+    }
+    if on("parking") {
+        let r = parking::parallel_park();
+        parking_gif(&r)?;
+        let _ = writeln!(md, "## parking\n\n{}", scenarios::table(&r.runs));
     }
     if on("quadruped") {
         let r = quadruped::trot();
