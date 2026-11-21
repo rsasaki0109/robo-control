@@ -14,7 +14,8 @@
 //! | Quadruped | single rigid body ([`scenarios::quadruped`]) | PD + force QP, convex MPC |
 //! | Humanoid | 3D LIPM ([`scenarios::humanoid`]) | ZMP preview control, DCM step adjustment |
 //!
-//! Generic pieces ([`lqr`], [`mpc`], [`ilqr`]) work on any [`model::Dynamics`].
+//! Generic pieces ([`lqr`], [`mpc`] (LTV-MPC and nonlinear MPC), [`mppi`], [`ilqr`])
+//! work on any [`model::Dynamics`].
 
 #![allow(rustdoc::broken_intra_doc_links)] // unit annotations such as [m] in docs
 // Index loops mirror the maths in the dynamics and solvers.
@@ -28,6 +29,7 @@ pub mod metrics;
 pub mod model;
 pub mod models;
 pub mod mpc;
+pub mod mppi;
 pub mod scenarios;
 pub mod sim;
 

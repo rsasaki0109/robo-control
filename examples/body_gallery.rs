@@ -493,7 +493,7 @@ fn drone_gif(res: &drone::DroneResult) -> std::io::Result<()> {
 }
 
 fn cartpole_gif(res: &cartpole::CartPoleResult) -> std::io::Result<()> {
-    let (w, h) = (900u32, 500u32);
+    let (w, h) = (900u32, 40 + 232 * res.runs.len() as u32);
     let mut gif = GifWriter::create(format!("{OUT}/cartpole.gif"), w, h)?;
     let l = res.model.pole_length_m;
     let t_end = *res.runs[0].log.t.last().unwrap();
@@ -571,7 +571,7 @@ fn main() -> std::io::Result<()> {
     }
     if on("car") {
         let r = wheeled::car_course();
-        wheeled_gif(&r, "car", "CAR (BICYCLE + STEER LAG) UP TO 12 M/S", true)?;
+        wheeled_gif(&r, "car", "CAR UP TO 12 M/S: 6 TRACKING CONTROLLERS", true)?;
         let _ = writeln!(md, "## car\n\n{}", scenarios::table(&r.runs));
     }
     if on("quadruped") {

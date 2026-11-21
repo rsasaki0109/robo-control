@@ -31,6 +31,10 @@ fn car_controllers_complete_the_course() {
         );
     }
     assert!(r.runs[3].metric("rms_cte_m") < r.runs[2].metric("rms_cte_m"));
+    // sampling-based MPPI tracks tighter than pure pursuit with no derivatives
+    let mppi = r.runs.iter().find(|x| x.name == "MPPI").unwrap();
+    assert!(mppi.metric("rms_cte_m") < r.runs[0].metric("rms_cte_m"));
+    assert!(r.runs.iter().any(|x| x.name.starts_with("NMPC")));
 }
 
 #[test]

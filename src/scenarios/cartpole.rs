@@ -5,6 +5,7 @@ use crate::controllers::cartpole::EnergySwingUp;
 use crate::ilqr::{solve, IlqrCost};
 use crate::model::{v, wrap};
 use crate::models::CartPole;
+use crate::mppi::Mppi;
 use crate::sim::{simulate, SimConfig};
 use nalgebra::{DMatrix, DVector};
 
@@ -19,8 +20,8 @@ pub struct CartPoleResult {
     pub push_t_s: f64,
 }
 
-/// Energy-shaping + LQR versus iLQR trajectory optimisation with TV-LQR
-/// feedback (then LQR), both from hanging, with a push once balanced.
+/// Energy-shaping + LQR, iLQR trajectory optimisation with TV-LQR feedback
+/// (then LQR), and MPPI alone, all from hanging, with a push once balanced.
 pub fn swing_up() -> CartPoleResult {
     let model = CartPole::default();
     let dt = 0.01;
@@ -91,6 +92,40 @@ pub fn swing_up() -> CartPoleResult {
     );
     runs.push(Run {
         name: "iLQR + TV-LQR".into(),
+        metrics: metrics(&log),
+        log,
+    });
+
+    // MPPI alone, swinging up and balancing with the same sampled controller.
+    let dt_m = 0.04;
+    let mut mppi = Mppi::new(1, 30, dt_m, 600, 0.5, v(&[6.0]), 5);
+    let mut held = DVector::zeros(1);
+    let log = simulate(
+        &model,
+        v(&[0.0, 0.0, std::f64::consts::PI, 0.0]),
+        &cfg,
+        |t, x| {
+            if (t / dt).round() as usize % 2 == 0 {
+                held = mppi.control(
+                    &model,
+                    x,
+                    |_, xk, uk| {
+                        10.0 * (1.0 - xk[2].cos())
+                            + 0.5 * xk[0] * xk[0]
+                            + 0.05 * xk[3] * xk[3]
+                            + 0.01 * xk[1] * xk[1]
+                            + 1e-4 * uk[0] * uk[0]
+                    },
+                    |xn| 50.0 * (1.0 - xn[2].cos()) + 5.0 * xn[0] * xn[0] + 0.5 * xn[3] * xn[3],
+                );
+            }
+            held.clone()
+        },
+        push,
+        |_, _| false,
+    );
+    runs.push(Run {
+        name: "MPPI".into(),
         metrics: metrics(&log),
         log,
     });

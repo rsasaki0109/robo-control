@@ -6,8 +6,10 @@ use crate::controllers::pid::Pid;
 use crate::lqr::TrackingLqr;
 use crate::metrics::{distance_to_polyline, max_abs, rms};
 use crate::model::v;
+use crate::model::Dynamics;
 use crate::models::{Bicycle, Unicycle};
-use crate::mpc::LtvMpc;
+use crate::mpc::{LtvMpc, Nmpc};
+use crate::mppi::Mppi;
 use crate::sim::{simulate, SimConfig};
 use nalgebra::{DMatrix, DVector};
 use robo_planning::trajectory::{densify, sample_traj, spline_path, time_parameterize, SpeedLimits, TrajPoint};
@@ -198,7 +200,8 @@ pub fn amr_warehouse() -> WheeledResult {
 }
 
 /// Fast car course: a spline circuit with hairpins driven at up to 12 m/s by a
-/// bicycle with steering lag; pure pursuit, Stanley, LQR and LTV-MPC.
+/// bicycle with steering lag; pure pursuit, Stanley, LQR, LTV-MPC, nonlinear
+/// MPC (iLQR) and MPPI.
 pub fn car_course() -> WheeledResult {
     let map = Map2D::new(Vec2::new(-5.0, -5.0), Vec2::new(85.0, 50.0))
         .circle(40.0, 22.0, 6.0)
@@ -329,7 +332,7 @@ pub fn car_course() -> WheeledResult {
     let r4 = reference.clone();
     let log = simulate(
         &car,
-        x0,
+        x0.clone(),
         &cfg,
         |t, x| {
             let refs: Vec<_> = (0..=mpc.horizon)
@@ -342,6 +345,77 @@ pub fn car_course() -> WheeledResult {
     );
     runs.push(Run {
         name: "LTV-MPC".into(),
+        metrics: path_metrics(&log, &reference, 0.0, &map),
+        log,
+    });
+
+    // Nonlinear MPC: iLQR on the full bicycle model, re-solved every step.
+    let dt_n = 0.1;
+    let mut nmpc = Nmpc::new(
+        DMatrix::from_diagonal(&v(&[5.0, 5.0, 20.0, 1.0, 0.5])),
+        DMatrix::from_diagonal(&v(&[0.5, 2.0])),
+        DMatrix::from_diagonal(&v(&[20.0, 20.0, 60.0, 2.0, 1.0])),
+        20,
+        dt_n,
+    );
+    nmpc.iterations = 8;
+    let r5 = reference.clone();
+    let log = simulate(
+        &car,
+        x0.clone(),
+        &cfg,
+        |t, x| {
+            let refs: Vec<_> = (0..=nmpc.horizon)
+                .map(|k| bicycle_ref(&car, &sample_traj(&r5, t + k as f64 * dt_n)))
+                .collect();
+            nmpc.control(&car, x, &refs)
+        },
+        no_d,
+        stop,
+    );
+    runs.push(Run {
+        name: "NMPC (iLQR)".into(),
+        metrics: path_metrics(&log, &reference, 0.0, &map),
+        log,
+    });
+
+    // MPPI: sampled rollouts of the same model and cost, no derivatives.
+    let q = [5.0, 5.0, 20.0, 1.0, 0.5];
+    let r = [0.5, 2.0];
+    let mut mppi = Mppi::new(2, 20, dt_n, 512, 2.0, v(&[1.0, 0.1]), 11);
+    mppi.set_nominal(
+        (0..20)
+            .map(|k| bicycle_ref(&car, &sample_traj(&reference, k as f64 * dt_n)).1)
+            .collect(),
+    );
+    let r6 = reference.clone();
+    let log = simulate(
+        &car,
+        x0,
+        &cfg,
+        |t, x| {
+            let refs: Vec<_> = (0..=20)
+                .map(|k| bicycle_ref(&car, &sample_traj(&r6, t + k as f64 * dt_n)))
+                .collect();
+            mppi.control(
+                &car,
+                x,
+                |k, xk, uk| {
+                    let e = car.state_error(xk, &refs[k].0);
+                    let du = uk - &refs[k].1;
+                    (0..5).map(|i| q[i] * e[i] * e[i]).sum::<f64>() + (0..2).map(|i| r[i] * du[i] * du[i]).sum::<f64>()
+                },
+                |xn| {
+                    let e = car.state_error(xn, &refs[20].0);
+                    4.0 * (0..5).map(|i| q[i] * e[i] * e[i]).sum::<f64>()
+                },
+            )
+        },
+        no_d,
+        stop,
+    );
+    runs.push(Run {
+        name: "MPPI".into(),
         metrics: path_metrics(&log, &reference, 0.0, &map),
         log,
     });

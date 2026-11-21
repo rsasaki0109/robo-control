@@ -40,13 +40,42 @@ fn rollout<M: Dynamics>(m: &M, x0: &DVector<f64>, us: &[DVector<f64>], dt: f64) 
     xs
 }
 
-fn total_cost<M: Dynamics>(m: &M, xs: &[DVector<f64>], us: &[DVector<f64>], c: &IlqrCost) -> f64 {
-    let mut j = 0.0;
-    for (x, u) in xs.iter().zip(us) {
-        let e = m.state_error(x, &c.goal);
-        j += (e.transpose() * &c.q * &e)[(0, 0)] + (u.transpose() * &c.r * u)[(0, 0)];
+/// Time-varying quadratic tracking cost: `sum (x_k - xr_k)' Q (x_k - xr_k) +
+/// (u_k - ur_k)' R (u_k - ur_k) + (x_N - xr_N)' Qf (x_N - xr_N)`.
+#[derive(Debug, Clone)]
+pub struct TrackingCost {
+    /// reference states `xr_0..xr_N`
+    pub x_ref: Vec<DVector<f64>>,
+    /// reference inputs `ur_0..ur_{N-1}`
+    pub u_ref: Vec<DVector<f64>>,
+    /// running state weight
+    pub q: DMatrix<f64>,
+    /// running input weight
+    pub r: DMatrix<f64>,
+    /// terminal state weight
+    pub qf: DMatrix<f64>,
+}
+
+impl TrackingCost {
+    fn from_goal(c: &IlqrCost, n: usize, nu: usize) -> Self {
+        Self {
+            x_ref: vec![c.goal.clone(); n + 1],
+            u_ref: vec![DVector::zeros(nu); n],
+            q: c.q.clone(),
+            r: c.r.clone(),
+            qf: c.qf.clone(),
+        }
     }
-    let e = m.state_error(xs.last().unwrap(), &c.goal);
+}
+
+fn total_cost<M: Dynamics>(m: &M, xs: &[DVector<f64>], us: &[DVector<f64>], c: &TrackingCost) -> f64 {
+    let mut j = 0.0;
+    for (k, (x, u)) in xs.iter().zip(us).enumerate() {
+        let e = m.state_error(x, &c.x_ref[k]);
+        let du = u - &c.u_ref[k];
+        j += (e.transpose() * &c.q * &e)[(0, 0)] + (du.transpose() * &c.r * &du)[(0, 0)];
+    }
+    let e = m.state_error(xs.last().unwrap(), c.x_ref.last().unwrap());
     j + (e.transpose() * &c.qf * &e)[(0, 0)]
 }
 
@@ -59,7 +88,24 @@ pub fn solve<M: Dynamics>(
     dt_s: f64,
     max_iters: usize,
 ) -> IlqrSolution {
+    let tc = TrackingCost::from_goal(cost, us0.len(), m.nu());
+    solve_tracking(m, x0, us0, &tc, dt_s, max_iters)
+}
+
+/// iLQR on a time-varying tracking cost (the building block of [`crate::mpc::Nmpc`]).
+pub fn solve_tracking<M: Dynamics>(
+    m: &M,
+    x0: &DVector<f64>,
+    us0: Vec<DVector<f64>>,
+    cost: &TrackingCost,
+    dt_s: f64,
+    max_iters: usize,
+) -> IlqrSolution {
     let n = us0.len();
+    assert!(
+        cost.x_ref.len() > n && cost.u_ref.len() >= n,
+        "reference shorter than the horizon"
+    );
     let mut us: Vec<DVector<f64>> = us0.iter().map(|u| m.clamp_input(u)).collect();
     let mut xs = rollout(m, x0, &us, dt_s);
     let mut j = total_cost(m, &xs, &us, cost);
@@ -70,15 +116,15 @@ pub fn solve<M: Dynamics>(
         iters = it + 1;
         let mut ff = vec![DVector::zeros(m.nu()); n];
         let mut kk = vec![DMatrix::zeros(m.nu(), m.nx()); n];
-        let e_n = m.state_error(&xs[n], &cost.goal);
+        let e_n = m.state_error(&xs[n], &cost.x_ref[n]);
         let mut vx = &cost.qf * e_n * 2.0;
         let mut vxx = &cost.qf * 2.0;
         let mut ok = true;
         for k in (0..n).rev() {
             let (a, b) = linearize(m, &xs[k], &us[k], dt_s);
-            let e = m.state_error(&xs[k], &cost.goal);
+            let e = m.state_error(&xs[k], &cost.x_ref[k]);
             let qx = &cost.q * e * 2.0 + a.transpose() * &vx;
-            let qu = &cost.r * &us[k] * 2.0 + b.transpose() * &vx;
+            let qu = &cost.r * (&us[k] - &cost.u_ref[k]) * 2.0 + b.transpose() * &vx;
             let qxx = &cost.q * 2.0 + a.transpose() * &vxx * &a;
             let quu = &cost.r * 2.0 + b.transpose() * &vxx * &b + DMatrix::identity(m.nu(), m.nu()) * mu;
             let qux = b.transpose() * &vxx * &a;

@@ -160,3 +160,71 @@ impl LtvMpc {
         m.clamp_input(&u)
     }
 }
+
+/// Nonlinear MPC: iLQR on the full nonlinear model over the horizon, re-solved
+/// at every call and warm-started from the previous solution shifted by one step.
+#[derive(Debug, Clone)]
+pub struct Nmpc {
+    /// stage state weight
+    pub q: DMatrix<f64>,
+    /// stage input-deviation weight
+    pub r: DMatrix<f64>,
+    /// terminal state weight
+    pub qf: DMatrix<f64>,
+    /// horizon [steps]
+    pub horizon: usize,
+    /// model step [s]
+    pub dt_s: f64,
+    /// iLQR iterations per call
+    pub iterations: usize,
+    warm: Option<Vec<DVector<f64>>>,
+    /// last predicted state trajectory (for plotting)
+    pub predicted: Vec<DVector<f64>>,
+}
+
+impl Nmpc {
+    /// New controller.
+    pub fn new(q: DMatrix<f64>, r: DMatrix<f64>, qf: DMatrix<f64>, horizon: usize, dt_s: f64) -> Self {
+        Self {
+            q,
+            r,
+            qf,
+            horizon,
+            dt_s,
+            iterations: 3,
+            warm: None,
+            predicted: vec![],
+        }
+    }
+
+    /// Computes the input. `refs[k] = (x_ref_k, u_ref_k)` for `k = 0..=horizon`.
+    pub fn control<M: Dynamics>(
+        &mut self,
+        m: &M,
+        x: &DVector<f64>,
+        refs: &[(DVector<f64>, DVector<f64>)],
+    ) -> DVector<f64> {
+        let n = self.horizon;
+        assert!(refs.len() > n, "need horizon + 1 reference samples");
+        let cost = crate::ilqr::TrackingCost {
+            x_ref: refs.iter().take(n + 1).map(|r| r.0.clone()).collect(),
+            u_ref: refs.iter().take(n).map(|r| r.1.clone()).collect(),
+            q: self.q.clone(),
+            r: self.r.clone(),
+            qf: self.qf.clone(),
+        };
+        let us0 = match self.warm.take() {
+            Some(mut w) if w.len() == n => {
+                w.rotate_left(1);
+                w[n - 1] = refs[n - 1].1.clone();
+                w
+            }
+            _ => cost.u_ref.clone(),
+        };
+        let sol = crate::ilqr::solve_tracking(m, x, us0, &cost, self.dt_s, self.iterations);
+        self.predicted = sol.xs.clone();
+        let u0 = sol.us[0].clone();
+        self.warm = Some(sol.us);
+        m.clamp_input(&u0)
+    }
+}
