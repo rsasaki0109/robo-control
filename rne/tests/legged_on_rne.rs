@@ -25,3 +25,9 @@ fn g1_dcm_stepping_walks_through_the_push_and_fixed_steps_fall() {
     let preview = g1::run(Strategy::PreviewFixedSteps, 8.0, false);
     assert!(preview.fell_at_s.is_some(), "fixed footsteps unexpectedly walked");
 }
+
+#[test]
+fn g1_also_walks_on_the_independent_force_qp_controller() {
+    let r = g1::run_with(Strategy::DcmStepAdjustment, 8.0, true, g1::WbcBackend::ForceQp);
+    assert!(r.fell_at_s.is_none(), "fell at {:?}", r.fell_at_s);
+}

@@ -3,10 +3,11 @@
 //! Every 10 ms robo-control's [`LipmWalker`] reads the measured CoM and returns
 //! the desired ZMP and footholds (the same walker drives the point-mass
 //! scenario in robo-control). Every 2 ms the ZMP, clamped to the support foot,
-//! gives the desired CoM acceleration `w^2 (c - p)`; [`ForceQpWbc`] turns it,
-//! an upright-pelvis task and the swing-leg inverse kinematics into joint
-//! torques; and `rne_dynamics::contact_step` advances the floating-base model
-//! with hard contacts at the four sole spheres of each foot.
+//! gives the desired CoM acceleration `w^2 (c - p)`; RNE's `rne_wbc` (with
+//! `enforce_contact_cones`) or this crate's [`ForceQpWbc`] turns it, an
+//! upright-pelvis task and the swing-leg inverse kinematics into joint torques;
+//! and `rne_dynamics::contact_step` advances the floating-base model with hard
+//! contacts at the four sole spheres of each foot.
 
 use nalgebra::{Rotation3, UnitQuaternion, Vector3};
 use rne_dynamics::{
@@ -200,10 +201,11 @@ pub struct SolePoint {
 /// the sole), then a weighted least-squares solve finds joint accelerations
 /// consistent with those forces, and inverse dynamics gives the torques.
 ///
-/// `rne_wbc::WholeBodyController` solves forces and accelerations together as
-/// an unconstrained least-squares problem and projects the forces onto the
-/// friction cones afterwards, so its torques can assume a sole edge pulling on
-/// the ground. That is harmless for point feet but tips a flat-footed biped.
+/// Written before `rne_wbc` could constrain contact forces inside its solve
+/// (`enforce_contact_cones`, added in RNE `926ef72`); kept as an independent
+/// cross-check. Without that option `rne_wbc` projects the forces onto the
+/// friction cones only after solving, so its torques can assume a sole edge
+/// pulling on the ground, which tips a flat-footed biped.
 #[derive(Debug, Clone)]
 pub struct ForceQpWbc {
     /// total mass
@@ -349,6 +351,16 @@ impl ForceQpWbc {
     }
 }
 
+/// Which whole-body controller turns the walker's CoM acceleration into torques.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WbcBackend {
+    /// [`ForceQpWbc`] in this crate.
+    ForceQp,
+    /// RNE's `rne_wbc::WholeBodyController` with `enforce_contact_cones` and
+    /// in-solve torque limits.
+    Rne,
+}
+
 /// Recorded frame.
 #[derive(Debug, Clone)]
 pub struct G1Frame {
@@ -401,8 +413,14 @@ pub fn g1_params(com_height_m: f64, step_width_m: f64) -> LipmParams {
 }
 
 /// Runs the G1 with `strategy` for `duration_s`, optionally pushed with the same
-/// velocity change as the point-mass scenario ([`PUSH`]).
+/// velocity change as the point-mass scenario ([`PUSH`]), on RNE's whole-body
+/// controller ([`WbcBackend::Rne`]).
 pub fn run(strategy: Strategy, duration_s: f64, push: bool) -> G1Run {
+    run_with(strategy, duration_s, push, WbcBackend::Rne)
+}
+
+/// [`run`] with a choice of whole-body controller.
+pub fn run_with(strategy: Strategy, duration_s: f64, push: bool, backend: WbcBackend) -> G1Run {
     let g1 = G1::load();
     let model = &g1.model;
     let nv = model.nv();
@@ -430,6 +448,14 @@ pub fn run(strategy: Strategy, duration_s: f64, push: bool) -> G1Run {
         inertia_kgm2: [1.5, 1.4, 0.4],
         mu: 0.6,
     };
+    let rne_controller = rne_wbc::WholeBodyController::new(rne_wbc::WholeBodyConfig {
+        torque_limits_nm: Some(g1.effort_nm.clone()),
+        enforce_torque_limits: true,
+        enforce_contact_cones: true,
+        com_weight: 1.0e4,
+        posture_weight: 10.0,
+        ..rne_wbc::WholeBodyConfig::default()
+    });
     let step_cfg = ContactStepConfig {
         step_time_s: dt,
         ..ContactStepConfig::default()
@@ -558,8 +584,46 @@ pub fn run(strategy: Strategy, duration_s: f64, push: bool) -> G1Run {
                     w_j[d] = 10.0;
                 }
             }
-            let sol = wbc.solve(model, &q, &qd, &soles, crate::na(com), acc, alpha, &qdd_j, &w_j);
-            tau[6..].copy_from_slice(&sol.tau);
+            match backend {
+                WbcBackend::ForceQp => {
+                    let sol = wbc.solve(model, &q, &qd, &soles, crate::na(com), acc, alpha, &qdd_j, &w_j);
+                    tau[6..].copy_from_slice(&sol.tau);
+                }
+                WbcBackend::Rne => {
+                    let contacts_w: Vec<rne_wbc::ContactPoint> = soles
+                        .iter()
+                        .map(|s| rne_wbc::ContactPoint::with_normal(s.link, s.local, 0.6, Vec3::new(0.0, 0.0, 1.0)))
+                        .collect();
+                    let com_task = rne_wbc::ComTask {
+                        desired_position_m: com,
+                        desired_velocity_m_s: Vec3::new(cd[0], cd[1], cd[2]),
+                        desired_acceleration_m_s2: crate::rv(acc),
+                        position_gain_s_inv2: 0.0,
+                        velocity_gain_s_inv: 0.0,
+                    };
+                    let attitude = rne_wbc::BaseAttitudeTask {
+                        desired_angular_acceleration_rad_s2: crate::rv(alpha),
+                    };
+                    let posture = rne_wbc::PostureTask {
+                        desired_joint_positions: desired.clone(),
+                        desired_joint_velocities: None,
+                        desired_joint_accelerations: None,
+                        position_gain_s_inv2: 400.0,
+                        velocity_gain_s_inv: 40.0,
+                    };
+                    if let Ok(sol) = rne_controller.solve(
+                        model,
+                        &q,
+                        &qd,
+                        &contacts_w,
+                        Some(&com_task),
+                        Some(&attitude),
+                        Some(&posture),
+                    ) {
+                        tau[6..].copy_from_slice(&sol.joint_torque_nm);
+                    }
+                }
+            }
         }
         let pushing = push && (PUSH.0..PUSH.0 + 0.1).contains(&t);
         if pushing {

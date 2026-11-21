@@ -8,9 +8,8 @@
 //!   the leg inverse kinematics.
 //! * [`g1`]: the 12-DoF G1 legs on `rne_dynamics::contact_step` with flat-foot
 //!   contacts. robo-control's LIPM walkers (ZMP preview, DCM step adjustment)
-//!   choose the CoM motion and footholds; a force-QP whole-body controller
-//!   built on `rne_dynamics` (mass matrix, bias forces, contact Jacobians) turns
-//!   them into joint torques.
+//!   choose the CoM motion and footholds; RNE's whole-body controller
+//!   (`rne_wbc` with `enforce_contact_cones`) turns them into joint torques.
 
 pub mod g1;
 pub mod go2;

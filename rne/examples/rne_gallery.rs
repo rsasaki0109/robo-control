@@ -288,6 +288,8 @@ fn main() -> std::io::Result<()> {
             let r = g1::run(s, 8.0, false);
             rows.push((format!("{} (no push)", r.name), r.metrics));
         }
+        let r = g1::run_with(Strategy::DcmStepAdjustment, 8.0, true, g1::WbcBackend::ForceQp);
+        rows.push((format!("{} (push, ForceQpWbc)", r.name), r.metrics));
         let _ = writeln!(md, "## g1\n\n{}", table(&rows));
     }
     std::fs::create_dir_all(OUT)?;

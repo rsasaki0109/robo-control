@@ -40,14 +40,14 @@ cargo run --release --example body_gallery humanoid     # one of: amr car quadru
 
 The same controllers also run on the full articulated robots of
 [Robot Native Engine](https://github.com/rsasaki0109/RobotNativeEngine) (RNE),
-in the `rne/` crate (`robo-control-rne`, RNE pinned to commit `8ff1cb4`):
+in the `rne/` crate (`robo-control-rne`, RNE pinned to commit `926ef72`):
 RNE's hard-contact floating-base dynamics (`rne_dynamics::contact_step`) is
 the plant, robo-control decides.
 
 | Go2 (12 DoF) | G1 (12-DoF legs) |
 |:---:|:---:|
 | ![go2 on rne](docs/media/rne_go2.gif) | ![g1 on rne](docs/media/rne_g1.gif) |
-| `legged3d::PdForceQp` vs `legged3d::ConvexMpc3d` choose the stance forces, applied as `-J^T f` on RNE's `Quadruped`; swing feet land at Raibert footholds through its leg IK. 0.5 then 1.0 m/s, a 120 N back push and a 100 N side push. | `scenarios::humanoid::LipmWalker` (ZMP preview on fixed steps vs DCM step adjustment, the same walker as the point-mass scenario) drives a force-QP whole-body controller on RNE's mass matrix, bias forces and Jacobians; four sole contacts per foot. |
+| `legged3d::PdForceQp` vs `legged3d::ConvexMpc3d` choose the stance forces, applied as `-J^T f` on RNE's `Quadruped`; swing feet land at Raibert footholds through its leg IK. 0.5 then 1.0 m/s, a 120 N back push and a 100 N side push. | `scenarios::humanoid::LipmWalker` (ZMP preview on fixed steps vs DCM step adjustment, the same walker as the point-mass scenario) drives RNE's whole-body controller (`rne_wbc`, contact cones enforced); four sole contacts per foot. |
 
 ```bash
 cargo run --release -p robo-control-rne --example rne_gallery     # out/rne/{go2,g1}.gif + metrics
@@ -65,10 +65,11 @@ cargo test --release -p robo-control-rne                          # asserts the 
 
 | controller | fell | fall_time_s | rms_speed_err_mps | distance_m | lateral_drift_m |
 |---|---|---|---|---|---|
-| ZMP preview (fixed steps) (push) | 1.000 | 3.200 | 0.292 | 0.611 | 0.715 |
-| DCM + step adjustment (push) | 0.000 | NaN | 0.085 | 2.294 | -0.003 |
-| ZMP preview (fixed steps) (no push) | 1.000 | 3.200 | 0.054 | 0.591 | 0.703 |
-| DCM + step adjustment (no push) | 0.000 | NaN | 0.060 | 2.194 | 0.083 |
+| ZMP preview (fixed steps) (push) | 1.000 | 4.084 | 0.087 | 0.827 | 0.588 |
+| DCM + step adjustment (push) | 0.000 | NaN | 0.060 | 2.068 | 0.270 |
+| ZMP preview (fixed steps) (no push) | 1.000 | 5.016 | 0.037 | 1.043 | 0.592 |
+| DCM + step adjustment (no push) | 0.000 | NaN | 0.033 | 1.994 | 0.227 |
+| DCM + step adjustment (push, ForceQpWbc) | 0.000 | NaN | 0.085 | 2.294 | -0.003 |
 
 What carried over and what did not:
 
@@ -77,22 +78,25 @@ What carried over and what did not:
   and stays more level after the side push (3 vs 6.5 degrees RMS tilt).
 - **G1**: DCM step adjustment walks 8 s and absorbs the same push as the
   point-mass scenario. ZMP preview control on fixed footsteps falls sideways
-  after about 5 steps *even without the push*: on the real leg dynamics each
-  footfall lands a little off, and moving the ZMP inside a 5 cm-wide sole cannot
-  absorb the accumulated error without moving the feet. In the point-mass
-  scenario, where swing legs are perfect, it only fails under the push.
+  after about 9 steps *even without the push* (4 s with it): on the real leg
+  dynamics each footfall lands a little off, and moving the ZMP inside a
+  5 cm-wide sole cannot absorb the accumulated error without moving the feet.
+  In the point-mass scenario, where swing legs are perfect, it only fails
+  under the push.
 - Three things were needed beyond the point-mass walker: telling the walker
   where each foot actually landed (`LipmWalker::set_stance_position`),
   switching support on measured contact rather than on the clock, and a
-  whole-body controller that keeps contact forces physical (below).
-- `rne_wbc::WholeBodyController` solves forces and accelerations as one
-  unconstrained least-squares problem and projects the forces onto the friction
-  cones only afterwards, so its torques can assume a sole edge pulling on the
-  ground; flat-footed walking tipped over with it. `rne::g1::ForceQpWbc`
-  distributes the centroidal wrench with a box QP (non-negative normal forces)
-  first and then solves the accelerations for those forces. With
-  `enforce_torque_limits: true` the RNE controller also returned far too little
-  vertical force for a standing G1 (114 N of 315 N), so it is left off there.
+  whole-body controller that keeps contact forces physical.
+- That last one was fixed in RNE itself (`926ef72`): `rne_wbc` used to solve
+  forces and accelerations unconstrained and project the forces onto the
+  friction cones only afterwards, so its torques could assume a sole edge
+  pulling on the ground; the G1 fell after 2.6 s with it. The new
+  `WholeBodyConfig::enforce_contact_cones` keeps the forces in friction
+  pyramids inside the solve, and its bounded solver is now an exact active-set
+  method (the old one supported only 114 N of a standing G1's 315 N with
+  `enforce_torque_limits`). The G1 here runs on that. `rne::g1::ForceQpWbc`, an
+  independent force-QP + inverse-dynamics controller written before the fix,
+  is kept as a cross-check (last row).
 
 ## Which controller for which body?
 
