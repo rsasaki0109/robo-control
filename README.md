@@ -49,8 +49,13 @@ the plant, robo-control decides.
 | ![go2 on rne](docs/media/rne_go2.gif) | ![g1 on rne](docs/media/rne_g1.gif) |
 | `legged3d::PdForceQp` vs `legged3d::ConvexMpc3d` choose the stance forces, applied as `-J^T f` on RNE's `Quadruped`; swing feet land at Raibert footholds through its leg IK. 0.5 then 1.0 m/s, a 120 N back push and a 100 N side push. | `scenarios::humanoid::LipmWalker` (ZMP preview on fixed steps vs DCM step adjustment, the same walker as the point-mass scenario) drives RNE's whole-body controller (`rne_wbc`, contact cones enforced); four sole contacts per foot. |
 
+| Go2 on rough terrain | G1 up a ramp |
+|:---:|:---:|
+| ![go2 terrain](docs/media/rne_go2_terrain.gif) | ![g1 ramp](docs/media/rne_g1_ramp.gif) |
+| Seeded fractal terrain, +-10 cm with 4 cm terraces under the path: footholds and the ride height follow the ground. | A 5 % ramp up to 6 cm, pushed mid-climb: contacts, swing heights and the CoM height follow the ground. |
+
 ```bash
-cargo run --release -p robo-control-rne --example rne_gallery     # out/rne/{go2,g1}.gif + metrics
+cargo run --release -p robo-control-rne --example rne_gallery     # out/rne/{go2,g1,go2_terrain,g1_ramp}.gif + metrics
 cargo test --release -p robo-control-rne                          # asserts the results below
 ```
 
@@ -71,6 +76,20 @@ cargo test --release -p robo-control-rne                          # asserts the 
 | DCM + step adjustment (no push) | 0.000 | NaN | 0.033 | 1.994 | 0.227 |
 | DCM + step adjustment (push, ForceQpWbc) | 0.000 | NaN | 0.085 | 2.294 | -0.003 |
 
+#### Go2 on terraced rough terrain (no pushes)
+
+| controller | fell | rms_speed_err_mps | rms_height_err_m | rms_tilt_rad | lateral_drift_m | distance_m |
+|---|---|---|---|---|---|---|
+| PD + force QP | 0.000 | 0.191 | 0.006 | 0.103 | -0.214 | 3.790 |
+| convex MPC | 0.000 | 0.064 | 0.006 | 0.048 | -0.175 | 4.623 |
+
+#### G1 up the 5 % ramp (pushed)
+
+| controller | fell | fall_time_s | rms_speed_err_mps | distance_m | lateral_drift_m |
+|---|---|---|---|---|---|
+| ZMP preview (fixed steps) (ramp, push) | 1.000 | 4.086 | 0.093 | 0.824 | 0.593 |
+| DCM + step adjustment (ramp, push) | 0.000 | NaN | 0.057 | 2.357 | 0.131 |
+
 What carried over and what did not:
 
 - **Go2**: both force controllers trot the articulated robot unchanged. The
@@ -83,6 +102,7 @@ What carried over and what did not:
   5 cm-wide sole cannot absorb the accumulated error without moving the feet.
   In the point-mass scenario, where swing legs are perfect, it only fails
   under the push.
+- **Terrain**: both Go2 controllers trot over +-10 cm terraced terrain (the MPC with half the tilt); the G1 with DCM stepping climbs a 5 % ramp through the push while fixed footsteps fall. Stairs are not there yet: with 0.12 m steps and a 0.17 m sole some footfall always straddles an edge, which needs a gait that matches its steps to the treads.
 - Three things were needed beyond the point-mass walker: telling the walker
   where each foot actually landed (`LipmWalker::set_stance_position`),
   switching support on measured contact rather than on the clock, and a

@@ -23,6 +23,10 @@ pub struct Go2Config {
     pub control_dt_s: f64,
     /// enable the pushes
     pub pushes: bool,
+    /// peak height of seeded fractal terrain [m] (0 = flat floor)
+    pub terrain_amplitude_m: f64,
+    /// height quantisation of the terrain samples [m] (terraced terrain; 0 = smooth)
+    pub terrain_step_m: f64,
 }
 
 impl Default for Go2Config {
@@ -34,6 +38,8 @@ impl Default for Go2Config {
             swing_height_m: 0.08,
             control_dt_s: 0.01,
             pushes: true,
+            terrain_amplitude_m: 0.0,
+            terrain_step_m: 0.0,
         }
     }
 }
@@ -82,6 +88,8 @@ pub struct Go2Frame {
     pub stance: [bool; 4],
     /// push on the base
     pub push_n: [f64; 3],
+    /// ground height along x around the robot, at the base's y: `(x, z)`
+    pub ground: Vec<[f64; 2]>,
 }
 
 /// Result of one run.
@@ -114,16 +122,41 @@ fn rotation(q: rne_math::Quat) -> Rotation3<f64> {
 /// Runs the Go2 under `controller`.
 pub fn run(controller: &mut dyn ForceController, cfg: &Go2Config) -> Go2Run {
     let quadruped = Arc::new(Quadruped::go2().expect("Go2 model"));
-    let floor = FractalTerrain {
-        size_x_m: 60.0,
-        size_z_m: 60.0,
-        columns: 5,
-        rows: 5,
-        amplitude_m: 0.0,
-        ..FractalTerrain::default()
-    }
-    .height_field(0)
-    .expect("flat floor");
+    let floor = if cfg.terrain_amplitude_m > 0.0 {
+        FractalTerrain {
+            size_x_m: 16.0,
+            size_z_m: 16.0,
+            columns: 161,
+            rows: 161,
+            frequency_per_m: 1.5,
+            amplitude_m: cfg.terrain_amplitude_m,
+            octaves: 3,
+            step_m: cfg.terrain_step_m,
+            ..FractalTerrain::default()
+        }
+        .height_field(7)
+        .expect("terrain")
+    } else {
+        FractalTerrain {
+            size_x_m: 60.0,
+            size_z_m: 60.0,
+            columns: 5,
+            rows: 5,
+            amplitude_m: 0.0,
+            ..FractalTerrain::default()
+        }
+        .height_field(0)
+        .expect("flat floor")
+    };
+    let terrain = floor.clone();
+    let ground = move |x: f64, y: f64| -> f64 {
+        let h = rne_locomotion::go2_learning::terrain_height_m(&terrain, x, y);
+        if h.is_finite() {
+            h
+        } else {
+            0.0
+        }
+    };
     let sim_cfg = TerrainSimConfig {
         step_time_s: 0.002,
         position_gain_nm_rad: 40.0,
@@ -196,7 +229,9 @@ pub fn run(controller: &mut dyn ForceController, cfg: &Go2Config) -> Go2Run {
             if !stance[i] {
                 let hip_now = base + r * na(legs[i].hip_offset_m) + Vector3::new(0.0, legs[i].thigh_offset_y_m, 0.0);
                 let hip_td = hip_now + state.velocity_mps * left;
-                touchdown[i] = raibert_foothold(hip_td, state.velocity_mps, v_cmd, cfg.period_s / 2.0, 0.06, 0.0);
+                let mut td = raibert_foothold(hip_td, state.velocity_mps, v_cmd, cfg.period_s / 2.0, 0.06, 0.0);
+                td.z = ground(td.x, td.y);
+                touchdown[i] = td;
             }
         }
         prev_stance = stance;
@@ -242,7 +277,10 @@ pub fn run(controller: &mut dyn ForceController, cfg: &Go2Config) -> Go2Run {
             } else {
                 let u = 0.5 - 0.5 * (std::f64::consts::PI * swing_s).cos();
                 let mut target = liftoff[i] + (touchdown[i] - liftoff[i]) * u;
-                target.z = foot_r + cfg.swing_height_m * (std::f64::consts::PI * swing_s).sin();
+                target.z = liftoff[i].z
+                    + (touchdown[i].z - liftoff[i].z) * u
+                    + foot_r
+                    + cfg.swing_height_m * (std::f64::consts::PI * swing_s).sin();
                 let foot_base = r.inverse() * (target - base);
                 let ang = quadruped.leg_inverse_kinematics(i, rv(foot_base));
                 for a in 0..3 {
@@ -263,13 +301,13 @@ pub fn run(controller: &mut dyn ForceController, cfg: &Go2Config) -> Go2Run {
             )
             .expect("step");
             let (roll, pitch, _) = r.euler_angles();
-            if base.z < 0.15 || roll.abs() > 0.8 || pitch.abs() > 0.8 {
+            if base.z - ground(base.x, base.y) < 0.15 || roll.abs() > 0.8 || pitch.abs() > 0.8 {
                 fell = Some(t);
             }
         }
         if t >= 1.5 {
             ev.push(state.velocity_mps.x - v_cmd[0]);
-            eh.push(com.z - cfg.height_m);
+            eh.push(com.z - cmd.height_m);
             let (roll, pitch, _) = r.euler_angles();
             eatt.push(roll.hypot(pitch));
         }
@@ -298,6 +336,12 @@ pub fn run(controller: &mut dyn ForceController, cfg: &Go2Config) -> Go2Run {
                 }),
                 stance,
                 push_n: [push.x, push.y, push.z],
+                ground: (0..=40)
+                    .map(|j| {
+                        let x = base.x - 1.0 + 0.05 * j as f64;
+                        [x, ground(x, base.y)]
+                    })
+                    .collect(),
             });
         }
     }

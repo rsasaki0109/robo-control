@@ -370,6 +370,8 @@ pub struct G1Frame {
     pub points: Vec<[f64; 3]>,
     /// top of the torso (pelvis + 0.45 m along the pelvis up axis)
     pub torso_top: [f64; 3],
+    /// ground height along x around the CoM: `(x, z)`
+    pub ground: Vec<[f64; 2]>,
     /// CoM
     pub com: [f64; 3],
     /// applied ZMP
@@ -399,6 +401,30 @@ pub struct G1Run {
     pub metrics: Vec<(String, f64)>,
 }
 
+/// Ground the G1 walks on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum G1Terrain {
+    /// level floor
+    Flat,
+    /// [`ramp_height_m`]: a 5 % incline from x = 0.8 m up to 6 cm
+    Ramp,
+}
+
+impl G1Terrain {
+    /// Ground height at `(x, y)`.
+    pub fn height_m(self, x: f64, y: f64) -> f64 {
+        match self {
+            G1Terrain::Flat => 0.0,
+            G1Terrain::Ramp => ramp_height_m(x, y),
+        }
+    }
+}
+
+/// A ramp: flat until x = 0.8 m, then rising at 5 % up to 6 cm.
+pub fn ramp_height_m(x: f64, _y: f64) -> f64 {
+    ((x - 0.8) * 0.05).clamp(0.0, 0.06)
+}
+
 /// Gait used on the G1: 0.45 s steps of 0.12 m (0.27 m/s), feet 0.236 m apart,
 /// a conservative support region inside the sole.
 pub fn g1_params(com_height_m: f64, step_width_m: f64) -> LipmParams {
@@ -421,6 +447,13 @@ pub fn run(strategy: Strategy, duration_s: f64, push: bool) -> G1Run {
 
 /// [`run`] with a choice of whole-body controller.
 pub fn run_with(strategy: Strategy, duration_s: f64, push: bool, backend: WbcBackend) -> G1Run {
+    run_on(strategy, duration_s, push, backend, G1Terrain::Flat)
+}
+
+/// [`run_with`] on a chosen [`G1Terrain`]: the contacts, the swing-foot heights and
+/// the CoM height target follow the ground.
+pub fn run_on(strategy: Strategy, duration_s: f64, push: bool, backend: WbcBackend, terrain: G1Terrain) -> G1Run {
+    let ground = move |x: f64, y: f64| terrain.height_m(x, y);
     let g1 = G1::load();
     let model = &g1.model;
     let nv = model.nv();
@@ -472,6 +505,7 @@ pub fn run_with(strategy: Strategy, duration_s: f64, push: bool, backend: WbcBac
     let mut last_out = None;
     let mut last_step = 0usize;
     let mut last_swing: Option<usize> = None;
+    let mut support_ground = 0.0;
     let steps = (duration_s / dt).round() as usize;
     for k in 0..steps {
         let t = k as f64 * dt;
@@ -493,12 +527,20 @@ pub fn run_with(strategy: Strategy, duration_s: f64, push: bool, backend: WbcBac
             }
         }
         let out = last_out.expect("walker output");
+        // CoM height follows the ground under the support foot (or both feet)
+        let support_target = if out.double_support {
+            0.5 * (ground(out.stance[0], out.stance[1]) + ground(out.swing.0[0], out.swing.0[1]))
+        } else {
+            ground(out.stance[0], out.stance[1])
+        };
+        // rise with the treads smoothly (first order, 0.3 s), not in one jolt
+        support_ground += (support_target - support_ground) * (dt / 0.3);
         let (lo, hi) = out.support;
         let zmp = [out.zmp_des[0].clamp(lo[0], hi[0]), out.zmp_des[1].clamp(lo[1], hi[1])];
         let acc = Vector3::new(
             w * w * (com.x - zmp[0]),
             w * w * (com.y - zmp[1]),
-            100.0 * (p.com_height_m - com.z) - 20.0 * cd[2],
+            100.0 * (p.com_height_m + support_ground - com.z) - 20.0 * cd[2],
         );
         // ---- contacts of the sole spheres with the floor
         let fk = model.kinematic().forward_kinematics(&q).expect("fk");
@@ -511,7 +553,7 @@ pub fn run_with(strategy: Strategy, duration_s: f64, push: bool, backend: WbcBac
                     link: g1.feet[s].0,
                     point_local_m: pt,
                     normal_world: Vec3::new(0.0, 0.0, 1.0),
-                    gap_m: pw.z,
+                    gap_m: pw.z - ground(pw.x, pw.y),
                     friction_coefficient: 0.8,
                 }
             })
@@ -552,7 +594,10 @@ pub fn run_with(strategy: Strategy, duration_s: f64, push: bool, backend: WbcBac
             let sm = 0.5 - 0.5 * (std::f64::consts::PI * u).cos();
             let x = l0[0] + (tg[0] - l0[0]) * sm - FOOT_CENTER_X_M;
             let y = l0[1] + (tg[1] - l0[1]) * sm;
-            let z = ANKLE_HEIGHT_M - 0.004 * u + 0.06 * (std::f64::consts::PI * u).sin();
+            // lift over the higher of the two treads, land on the target's
+            let (g0, g1h) = (ground(l0[0], l0[1]), ground(tg[0], tg[1]));
+            let z = ANKLE_HEIGHT_M + g0 + (g1h - g0) * sm - 0.004 * u
+                + (0.06 + (g1h - g0).abs()) * (std::f64::consts::PI * u).sin();
             q_ref[..6].copy_from_slice(&q[..6]);
             g1.leg_ik(&mut q_ref, s, Vector3::new(x, y, z), 6);
             for &d in &g1.leg_dofs[s] {
@@ -653,7 +698,7 @@ pub fn run_with(strategy: Strategy, duration_s: f64, push: bool, backend: WbcBac
             q = st.q;
             qd = st.qd;
             let (roll, pitch, _) = G1::base_rotation(&q).euler_angles();
-            if q[2] < 0.45 || roll.abs() > 0.7 || pitch.abs() > 0.7 {
+            if q[2] - ground(q[0], q[1]) < 0.45 || roll.abs() > 0.7 || pitch.abs() > 0.7 {
                 fell = Some(t);
             }
         }
@@ -666,6 +711,12 @@ pub fn run_with(strategy: Strategy, duration_s: f64, push: bool, backend: WbcBac
             frames.push(G1Frame {
                 t,
                 torso_top: [q[0] + up.x, q[1] + up.y, q[2] + up.z],
+                ground: (0..=36)
+                    .map(|j| {
+                        let x = com.x - 0.9 + 0.05 * j as f64;
+                        [x, ground(x, com.y)]
+                    })
+                    .collect(),
                 points: g1
                     .draw_links
                     .iter()

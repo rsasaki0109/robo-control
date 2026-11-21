@@ -3,7 +3,7 @@
 //!
 //! ```bash
 //! cargo run --release -p robo-control-rne --example rne_gallery        # out/rne/{go2,g1}.gif + README.md
-//! cargo run --release -p robo-control-rne --example rne_gallery g1     # one of: go2 g1
+//! cargo run --release -p robo-control-rne --example rne_gallery g1     # one of: go2 g1 go2_terrain g1_ramp
 //! ```
 
 use robo_control::legged3d::{ConvexMpc3d, ForceController, PdForceQp};
@@ -38,40 +38,45 @@ fn table(rows: &[(String, Vec<(String, f64)>)]) -> String {
     s
 }
 
-fn ground(c: &mut Canvas, v: &View, x0: f64, x1: f64, y_bottom: f32) {
-    let (gx0, gy) = v.px(Vec2::new(x0, 0.0));
-    let (gx1, _) = v.px(Vec2::new(x1, 0.0));
-    c.rect_px(gx0, gy, gx1 - gx0, y_bottom - gy, Rgba::rgb(225, 220, 205));
-    let mut tick = (x0 * 4.0).ceil() / 4.0;
-    while tick < x1 {
-        let (tx, ty) = v.px(Vec2::new(tick, 0.0));
+/// Ground from a sampled profile `(x, z)`, filled down to `y_bottom` px.
+fn ground_profile(c: &mut Canvas, v: &View, profile: &[[f64; 2]], y_bottom: f32) {
+    let mut poly: Vec<(f32, f32)> = profile.iter().map(|g| v.px(Vec2::new(g[0], g[1]))).collect();
+    if let (Some(first), Some(last)) = (poly.first().copied(), poly.last().copied()) {
+        poly.push((last.0, y_bottom));
+        poly.push((first.0, y_bottom));
+    }
+    c.polygon_px(&poly, Rgba::rgb(225, 220, 205));
+    let line: Vec<(f32, f32)> = profile.iter().map(|g| v.px(Vec2::new(g[0], g[1]))).collect();
+    c.polyline_px(&line, Rgba::rgb(150, 140, 120), 2.0);
+    for g in profile.iter().step_by(5) {
+        let (tx, ty) = v.px(Vec2::new(g[0], g[1]));
         c.rect_px(tx - 1.0, ty, 2.0, 8.0, colors::INK);
-        tick += 0.25;
     }
 }
 
-fn go2_gif(runs: &[go2::Go2Run]) -> std::io::Result<()> {
+fn go2_gif(runs: &[go2::Go2Run], file: &str, heading: &str) -> std::io::Result<()> {
     let (w, h) = (900u32, 600u32);
-    let mut gif = GifWriter::create(format!("{OUT}/go2.gif"), w, h)?;
+    let mut gif = GifWriter::create(format!("{OUT}/{file}.gif"), w, h)?;
     let n = runs[0].frames.len();
     for fi in (0..n).step_by(3) {
         let mut c = Canvas::new(w, h);
-        title(&mut c, "RNE UNITREE GO2: SPEED STEPS, BACK PUSH 3 S, SIDE PUSH 6 S");
+        title(&mut c, heading);
         for (k, r) in runs.iter().enumerate() {
             let f = &r.frames[fi.min(r.frames.len() - 1)];
             let y0 = 36.0 + k as f32 * 282.0;
             let cx = f.base_m[0];
             // side view (x-z)
+            let gz = f.ground[20][1];
             let v = View::fit(
-                Vec2::new(cx - 0.9, -0.08),
-                Vec2::new(cx + 0.9, 0.55),
+                Vec2::new(cx - 0.9, gz - 0.14),
+                Vec2::new(cx + 0.9, gz + 0.5),
                 10.0,
                 y0,
                 640.0,
                 276.0,
             );
             c.rect_px(10.0, y0, 640.0, 276.0, colors::WHITE);
-            ground(&mut c, &v, cx - 0.9, cx + 0.9, y0 + 276.0);
+            ground_profile(&mut c, &v, &f.ground, y0 + 276.0);
             let p = |a: [f64; 3]| Vec2::new(a[0], a[2]);
             let leg = |c: &mut Canvas, i: usize, col: Rgba, wpx: f32| {
                 let l = f.legs[i];
@@ -157,33 +162,28 @@ fn go2_gif(runs: &[go2::Go2Run]) -> std::io::Result<()> {
     Ok(())
 }
 
-fn g1_gif(runs: &[g1::G1Run]) -> std::io::Result<()> {
+fn g1_gif(runs: &[g1::G1Run], file: &str, heading: &str) -> std::io::Result<()> {
     let (w, h) = (920u32, 600u32);
-    let mut gif = GifWriter::create(format!("{OUT}/g1.gif"), w, h)?;
+    let mut gif = GifWriter::create(format!("{OUT}/{file}.gif"), w, h)?;
     let n = runs.iter().map(|r| r.frames.len()).max().unwrap();
     for fi in (0..n).step_by(2) {
         let mut c = Canvas::new(w, h);
-        title(
-            &mut c,
-            &format!(
-                "RNE UNITREE G1 (12 DOF): PUSH ({:.2}, {:.2}) M/S AT {:.1} S",
-                PUSH.1[0], PUSH.1[1], PUSH.0
-            ),
-        );
+        title(&mut c, heading);
         for (k, r) in runs.iter().enumerate() {
             let f = &r.frames[fi.min(r.frames.len() - 1)];
             let x0 = 10.0 + k as f32 * 455.0;
             let cx = f.com[0];
+            let gz = f.ground[18][1];
             let sv = View::fit(
-                Vec2::new(cx - 0.9, -0.05),
-                Vec2::new(cx + 0.9, 1.45),
+                Vec2::new(cx - 0.9, gz - 0.05),
+                Vec2::new(cx + 0.9, gz + 1.45),
                 x0,
                 36.0,
                 445.0,
                 330.0,
             );
             c.rect_px(x0, 36.0, 445.0, 330.0, colors::WHITE);
-            ground(&mut c, &sv, cx - 0.9, cx + 0.9, 366.0);
+            ground_profile(&mut c, &sv, &f.ground, 366.0);
             let p = |a: [f64; 3]| Vec2::new(a[0], a[2]);
             // points: pelvis, left hip/knee/ankle, right hip/knee/ankle
             let pelvis = p(f.points[0]);
@@ -270,7 +270,11 @@ fn main() -> std::io::Result<()> {
         let cfg = go2::Go2Config::default();
         let mut ctrls: Vec<Box<dyn ForceController>> = vec![Box::new(PdForceQp::new(p)), Box::new(ConvexMpc3d::new(p))];
         let runs: Vec<go2::Go2Run> = ctrls.iter_mut().map(|c| go2::run(c.as_mut(), &cfg)).collect();
-        go2_gif(&runs)?;
+        go2_gif(
+            &runs,
+            "go2",
+            "RNE UNITREE GO2: SPEED STEPS, BACK PUSH 3 S, SIDE PUSH 6 S",
+        )?;
         let rows: Vec<_> = runs.iter().map(|r| (r.name.clone(), r.metrics.clone())).collect();
         let _ = writeln!(md, "## go2\n\n{}", table(&rows));
     }
@@ -279,7 +283,14 @@ fn main() -> std::io::Result<()> {
             g1::run(Strategy::PreviewFixedSteps, 8.0, true),
             g1::run(Strategy::DcmStepAdjustment, 8.0, true),
         ];
-        g1_gif(&runs)?;
+        g1_gif(
+            &runs,
+            "g1",
+            &format!(
+                "RNE UNITREE G1 (12 DOF): PUSH ({:.2}, {:.2}) M/S AT {:.1} S",
+                PUSH.1[0], PUSH.1[1], PUSH.0
+            ),
+        )?;
         let mut rows: Vec<_> = runs
             .iter()
             .map(|r| (format!("{} (push)", r.name), r.metrics.clone()))
@@ -291,6 +302,45 @@ fn main() -> std::io::Result<()> {
         let r = g1::run_with(Strategy::DcmStepAdjustment, 8.0, true, g1::WbcBackend::ForceQp);
         rows.push((format!("{} (push, ForceQpWbc)", r.name), r.metrics));
         let _ = writeln!(md, "## g1\n\n{}", table(&rows));
+    }
+    if on("go2_terrain") {
+        let q = rne_locomotion::Quadruped::go2().expect("Go2");
+        let p = go2::go2_srb(&q);
+        let cfg = go2::Go2Config {
+            pushes: false,
+            terrain_amplitude_m: 0.2,
+            terrain_step_m: 0.04,
+            ..Default::default()
+        };
+        let mut ctrls: Vec<Box<dyn ForceController>> = vec![Box::new(PdForceQp::new(p)), Box::new(ConvexMpc3d::new(p))];
+        let runs: Vec<go2::Go2Run> = ctrls.iter_mut().map(|c| go2::run(c.as_mut(), &cfg)).collect();
+        go2_gif(&runs, "go2_terrain", "RNE GO2 ON TERRACED ROUGH TERRAIN (+-10 CM)")?;
+        let rows: Vec<_> = runs.iter().map(|r| (r.name.clone(), r.metrics.clone())).collect();
+        let _ = writeln!(md, "## go2 terrain\n\n{}", table(&rows));
+    }
+    if on("g1_ramp") {
+        let runs = vec![
+            g1::run_on(
+                Strategy::PreviewFixedSteps,
+                9.0,
+                true,
+                g1::WbcBackend::Rne,
+                g1::G1Terrain::Ramp,
+            ),
+            g1::run_on(
+                Strategy::DcmStepAdjustment,
+                9.0,
+                true,
+                g1::WbcBackend::Rne,
+                g1::G1Terrain::Ramp,
+            ),
+        ];
+        g1_gif(&runs, "g1_ramp", "RNE G1 UP A 5% RAMP, PUSHED AT 3.1 S")?;
+        let rows: Vec<_> = runs
+            .iter()
+            .map(|r| (format!("{} (ramp, push)", r.name), r.metrics.clone()))
+            .collect();
+        let _ = writeln!(md, "## g1 ramp\n\n{}", table(&rows));
     }
     std::fs::create_dir_all(OUT)?;
     std::fs::write(format!("{OUT}/README.md"), &md)?;
