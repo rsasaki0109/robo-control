@@ -3,7 +3,7 @@
 //!
 //! ```bash
 //! cargo run --release -p robo-control-rne --example rne_gallery        # out/rne/{go2,g1}.gif + README.md
-//! cargo run --release -p robo-control-rne --example rne_gallery g1     # one of: go2 g1 go2_terrain g1_ramp fleet
+//! cargo run --release -p robo-control-rne --example rne_gallery g1     # one of: go2 g1 go2_terrain go2_stairs g1_ramp fleet
 //! ```
 
 use robo_control::legged3d::{ConvexMpc3d, ForceController, PdForceQp};
@@ -383,6 +383,22 @@ fn main() -> std::io::Result<()> {
         go2_gif(&runs, "go2_terrain", "RNE GO2 ON TERRACED ROUGH TERRAIN (+-10 CM)")?;
         let rows: Vec<_> = runs.iter().map(|r| (r.name.clone(), r.metrics.clone())).collect();
         let _ = writeln!(md, "## go2 terrain\n\n{}", table(&rows));
+    }
+    if on("go2_stairs") {
+        let q = rne_locomotion::Quadruped::go2().expect("Go2");
+        let p = go2::go2_srb(&q);
+        let cfg = go2::Go2Config {
+            pushes: false,
+            stairs_rise_m: 0.10,
+            swing_height_m: 0.12,
+            duration_s: 9.0,
+            ..Default::default()
+        };
+        let mut ctrls: Vec<Box<dyn ForceController>> = vec![Box::new(PdForceQp::new(p)), Box::new(ConvexMpc3d::new(p))];
+        let runs: Vec<go2::Go2Run> = ctrls.iter_mut().map(|c| go2::run(c.as_mut(), &cfg)).collect();
+        go2_gif(&runs, "go2_stairs", "RNE GO2 UP 5 STAIRS (10 CM RISE, 30 CM TREAD)")?;
+        let rows: Vec<_> = runs.iter().map(|r| (r.name.clone(), r.metrics.clone())).collect();
+        let _ = writeln!(md, "## go2 stairs\n\n{}", table(&rows));
     }
     if on("g1_ramp") {
         let runs = vec![

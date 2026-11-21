@@ -27,6 +27,25 @@ pub struct Go2Config {
     pub terrain_amplitude_m: f64,
     /// height quantisation of the terrain samples [m] (terraced terrain; 0 = smooth)
     pub terrain_step_m: f64,
+    /// stairs with this rise per step [m] (0 = none); see [`stairs_height_m`]
+    pub stairs_rise_m: f64,
+}
+
+/// Stair tread depth [m].
+pub const STAIR_TREAD_M: f64 = 0.3;
+/// First riser [m].
+pub const STAIR_START_M: f64 = 1.5;
+/// Number of steps up.
+pub const STAIR_STEPS: usize = 5;
+
+/// Stairs along +x: flat until [`STAIR_START_M`], then [`STAIR_STEPS`] steps of
+/// `rise_m`, treads [`STAIR_TREAD_M`] deep, then a flat landing.
+pub fn stairs_height_m(x: f64, rise_m: f64) -> f64 {
+    if x < STAIR_START_M {
+        return 0.0;
+    }
+    let k = (((x - STAIR_START_M) / STAIR_TREAD_M).floor() as usize + 1).min(STAIR_STEPS);
+    k as f64 * rise_m
 }
 
 impl Default for Go2Config {
@@ -40,6 +59,7 @@ impl Default for Go2Config {
             pushes: true,
             terrain_amplitude_m: 0.0,
             terrain_step_m: 0.0,
+            stairs_rise_m: 0.0,
         }
     }
 }
@@ -167,7 +187,23 @@ impl<'a> Go2Sim<'a> {
     /// Standing Go2 at `(x, y)` facing +x.
     pub fn new(controller: &'a mut dyn ForceController, cfg: Go2Config, start_xy: [f64; 2]) -> Self {
         let quadruped = Arc::new(Quadruped::go2().expect("Go2 model"));
-        let floor = if cfg.terrain_amplitude_m > 0.0 {
+        let floor = if cfg.stairs_rise_m > 0.0 {
+            // 1 cm samples along x so each riser is (nearly) vertical
+            let (size, cols, rows) = (16.0, 1601u32, 5u32);
+            let heights: Vec<f64> = (0..rows)
+                .flat_map(|_| {
+                    (0..cols).map(move |c| {
+                        stairs_height_m(-size / 2.0 + size * c as f64 / (cols - 1) as f64, cfg.stairs_rise_m)
+                    })
+                })
+                .collect();
+            rne_physics::ColliderShape::HeightField {
+                nrows: rows,
+                ncols: cols,
+                heights_m: std::sync::Arc::from(heights),
+                scale: Vec3::new(size, 1.0, size),
+            }
+        } else if cfg.terrain_amplitude_m > 0.0 {
             FractalTerrain {
                 size_x_m: 16.0,
                 size_z_m: 16.0,
