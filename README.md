@@ -22,7 +22,7 @@ cart-pole. Reference paths come from
 | Quadruped (dog type) | Humanoid |
 |:---:|:---:|
 | ![quadruped](docs/media/quadruped.gif) | ![humanoid](docs/media/humanoid.gif) |
-| Trot on a sagittal single-rigid-body model, speed steps and a 24 N s backward push; **PD + force-distribution QP vs convex MPC** over one gait cycle | 3D LIPM walking, 0.35 / 0.25 m/s push mid-step; **ZMP preview control on fixed footsteps falls, DCM control with step adjustment recovers** |
+| Trot on a sagittal single-rigid-body model, speed steps and a 24 N s backward push; **PD + force-distribution QP vs convex MPC** over one gait cycle (3D versions run the articulated Go2, below) | 3D LIPM walking, 0.35 / 0.25 m/s push mid-step; **ZMP preview control on fixed footsteps falls, DCM control with step adjustment recovers** (the same walkers drive the articulated G1, below) |
 
 ### Manipulator, aerial, balancing
 
@@ -36,14 +36,72 @@ cargo run --release --example body_gallery              # all GIFs + metric tabl
 cargo run --release --example body_gallery humanoid     # one of: amr car quadruped humanoid arm drone cartpole
 ```
 
+## On Robot Native Engine: articulated Unitree Go2 and G1
+
+The same controllers also run on the full articulated robots of
+[Robot Native Engine](https://github.com/rsasaki0109/RobotNativeEngine) (RNE),
+in the `rne/` crate (`robo-control-rne`, RNE pinned to commit `8ff1cb4`):
+RNE's hard-contact floating-base dynamics (`rne_dynamics::contact_step`) is
+the plant, robo-control decides.
+
+| Go2 (12 DoF) | G1 (12-DoF legs) |
+|:---:|:---:|
+| ![go2 on rne](docs/media/rne_go2.gif) | ![g1 on rne](docs/media/rne_g1.gif) |
+| `legged3d::PdForceQp` vs `legged3d::ConvexMpc3d` choose the stance forces, applied as `-J^T f` on RNE's `Quadruped`; swing feet land at Raibert footholds through its leg IK. 0.5 then 1.0 m/s, a 120 N back push and a 100 N side push. | `scenarios::humanoid::LipmWalker` (ZMP preview on fixed steps vs DCM step adjustment, the same walker as the point-mass scenario) drives a force-QP whole-body controller on RNE's mass matrix, bias forces and Jacobians; four sole contacts per foot. |
+
+```bash
+cargo run --release -p robo-control-rne --example rne_gallery     # out/rne/{go2,g1}.gif + metrics
+cargo test --release -p robo-control-rne                          # asserts the results below
+```
+
+#### Go2 on RNE
+
+| controller | fell | rms_speed_err_mps | rms_height_err_m | rms_tilt_rad | lateral_drift_m | distance_m |
+|---|---|---|---|---|---|---|
+| PD + force QP | 0.000 | 0.252 | 0.005 | 0.113 | 0.282 | 3.468 |
+| convex MPC | 0.000 | 0.143 | 0.009 | 0.055 | 0.143 | 4.473 |
+
+#### G1 on RNE
+
+| controller | fell | fall_time_s | rms_speed_err_mps | distance_m | lateral_drift_m |
+|---|---|---|---|---|---|
+| ZMP preview (fixed steps) (push) | 1.000 | 3.200 | 0.292 | 0.611 | 0.715 |
+| DCM + step adjustment (push) | 0.000 | NaN | 0.085 | 2.294 | -0.003 |
+| ZMP preview (fixed steps) (no push) | 1.000 | 3.200 | 0.054 | 0.591 | 0.703 |
+| DCM + step adjustment (no push) | 0.000 | NaN | 0.060 | 2.194 | 0.083 |
+
+What carried over and what did not:
+
+- **Go2**: both force controllers trot the articulated robot unchanged. The
+  convex MPC tracks speed better (0.14 vs 0.25 m/s RMS, including both pushes)
+  and stays more level after the side push (3 vs 6.5 degrees RMS tilt).
+- **G1**: DCM step adjustment walks 8 s and absorbs the same push as the
+  point-mass scenario. ZMP preview control on fixed footsteps falls sideways
+  after about 5 steps *even without the push*: on the real leg dynamics each
+  footfall lands a little off, and moving the ZMP inside a 5 cm-wide sole cannot
+  absorb the accumulated error without moving the feet. In the point-mass
+  scenario, where swing legs are perfect, it only fails under the push.
+- Three things were needed beyond the point-mass walker: telling the walker
+  where each foot actually landed (`LipmWalker::set_stance_position`),
+  switching support on measured contact rather than on the clock, and a
+  whole-body controller that keeps contact forces physical (below).
+- `rne_wbc::WholeBodyController` solves forces and accelerations as one
+  unconstrained least-squares problem and projects the forces onto the friction
+  cones only afterwards, so its torques can assume a sole edge pulling on the
+  ground; flat-footed walking tipped over with it. `rne::g1::ForceQpWbc`
+  distributes the centroidal wrench with a box QP (non-negative normal forces)
+  first and then solves the accelerations for those forces. With
+  `enforce_torque_limits: true` the RNE controller also returned far too little
+  vertical force for a standing G1 (114 N of 315 N), so it is left off there.
+
 ## Which controller for which body?
 
 | Body | Model (`models`) | Controllers | Where |
 |---|---|---|---|
 | Differential drive | `Unicycle` (x, y, yaw, v, w with first-order velocity loops) | pure pursuit, Kanayama, LQR, LTV-MPC (DWA in robo-planning) | `controllers::path_tracking`, `lqr`, `mpc` |
 | Car | `Bicycle` (kinematic, rear axle, steering lag) | pure pursuit, Stanley, LQR, LTV-MPC | same |
-| Quadruped | single rigid body + massless legs (`scenarios::quadruped`) | PD wrench + force-distribution QP, convex MPC, Raibert foot placement | `scenarios::quadruped` |
-| Humanoid | 3D linear inverted pendulum with ZMP inside the foot (`scenarios::humanoid`) | ZMP preview control (Kajita), DCM / capture-point control with step adjustment | `scenarios::humanoid` |
+| Quadruped | single rigid body + massless legs (`scenarios::quadruped` 2D, `legged3d` 3D) | PD wrench + force-distribution QP, convex MPC, Raibert foot placement | `scenarios::quadruped`, `legged3d` |
+| Humanoid | 3D linear inverted pendulum with ZMP inside the foot (`scenarios::humanoid`) | ZMP preview control (Kajita) + DCM stabilizer, DCM / capture-point control with step adjustment (`LipmWalker`) | `scenarios::humanoid` |
 | Serial arm | `PlanarArmDyn` (N links, recursive Newton-Euler, payload, friction) | PD, PD + gravity compensation, computed torque | `controllers::arm` |
 | Drone | `Quadrotor2D` (x-z, two rotors) | cascaded PID, LQR, LTV-MPC with flatness-based feed-forward | `controllers::quadrotor` |
 | Inverted pendulum | `CartPole` | energy swing-up + LQR, iLQR + TV-LQR | `controllers::cartpole`, `ilqr` |
@@ -86,7 +144,7 @@ Generated by `body_gallery` (also written to `out/bodies/README.md`).
 
 | controller | fell | fall_time_s | rms_speed_err_mps | zmp_saturated_frac |
 |---|---|---|---|---|
-| ZMP preview (fixed steps) | 1.000 | 4.210 | 1.689 | 0.562 |
+| ZMP preview (fixed steps) | 1.000 | 4.635 | 0.062 | 0.556 |
 | DCM + step adjustment | 0.000 | NaN | 0.061 | 0.051 |
 
 #### arm
@@ -126,6 +184,7 @@ Notes on reading the numbers:
 cargo fmt --all
 cargo clippy --all-targets -- -D warnings
 cargo test        # every scenario's headline result is asserted in tests/scenarios.rs
+cargo test --release -p robo-control-rne   # Go2 / G1 on RNE (first build fetches and compiles RNE, ~4 min)
 ```
 
 Everything is deterministic: fixed-step RK4 / semi-implicit Euler, no wall clock,

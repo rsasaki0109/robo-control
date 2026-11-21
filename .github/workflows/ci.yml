@@ -14,3 +14,12 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       - run: cargo run --release --example body_gallery
+  rne:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo clippy -p robo-control-rne --all-targets -- -D warnings
+      - run: cargo test --release -p robo-control-rne

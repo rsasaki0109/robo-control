@@ -170,80 +170,174 @@ impl Preview {
 /// Double-support time before the first step [s].
 pub const START_S: f64 = 1.0;
 
-/// Simulates walking with `dcm_stepping = false` (preview control, fixed footsteps)
-/// or `true` (DCM control with step adjustment). `push` enables [`PUSH`].
-pub fn walk(p: LipmParams, dcm_stepping: bool, duration_s: f64, push: bool) -> HumanoidRun {
-    let dt = 0.005;
-    let w = p.omega();
-    let w2 = w * w;
-    let ewt = (w * p.step_s).exp();
-    let n_steps = (duration_s / p.step_s) as usize + 8;
-    let plan = nominal_steps(&p, n_steps);
-    let left0 = [0.0, p.step_width_m / 2.0];
-    // ZMP reference: midpoint during double support, then foot centres
-    let zref = |t: f64| -> [f64; 2] {
+/// Walking strategy of a [`LipmWalker`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Strategy {
+    /// ZMP preview control (Kajita 2003) on fixed, pre-planned footsteps.
+    PreviewFixedSteps,
+    /// DCM control that re-plans each foothold from the predicted DCM at touchdown.
+    DcmStepAdjustment,
+}
+
+impl Strategy {
+    /// Display name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Strategy::PreviewFixedSteps => "ZMP preview (fixed steps)",
+            Strategy::DcmStepAdjustment => "DCM + step adjustment",
+        }
+    }
+}
+
+/// One walker update.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WalkerOutput {
+    /// desired ZMP before clamping to the support region
+    pub zmp_des: [f64; 2],
+    /// support region (axis-aligned) lower and upper corners
+    pub support: ([f64; 2], [f64; 2]),
+    /// whether both feet are on the ground (initial double support)
+    pub double_support: bool,
+    /// stance foot centre (single support)
+    pub stance: [f64; 2],
+    /// stance foot is the left foot
+    pub stance_left: bool,
+    /// swing foot lift-off point, current target and progress in `[0, 1]`
+    pub swing: ([f64; 2], [f64; 2], f64),
+    /// index of the current step (0 before walking)
+    pub step_index: usize,
+}
+
+/// Online LIPM walking controller: feed it the measured CoM and CoM velocity
+/// every `dt_s`, get the desired ZMP and the footholds. It drives both the
+/// point-mass simulation of [`walk`] and full robots (e.g. the Unitree G1 on RNE).
+#[derive(Debug, Clone)]
+pub struct LipmWalker {
+    /// gait parameters
+    pub p: LipmParams,
+    /// strategy
+    pub strategy: Strategy,
+    dt: f64,
+    plan: Vec<[f64; 2]>,
+    left0: [f64; 2],
+    /// footsteps placed so far (centres)
+    pub steps: Vec<[f64; 2]>,
+    stance: [f64; 2],
+    next: [f64; 2],
+    liftoff: [f64; 2],
+    step_idx: usize,
+    preview: Preview,
+    /// preview reference state per axis: CoM, CoM velocity, CoM acceleration
+    reference: Option<[[f64; 3]; 2]>,
+    esum: [f64; 2],
+}
+
+impl LipmWalker {
+    /// Walker standing with its right foot at `right0` (first stance foot) and
+    /// its left foot `step_width_m` to the left, CoM between them.
+    pub fn new(p: LipmParams, strategy: Strategy, dt_s: f64, right0: [f64; 2], n_steps: usize) -> Self {
+        let plan: Vec<[f64; 2]> = nominal_steps(&p, n_steps)
+            .into_iter()
+            .map(|s| [s[0] + right0[0], s[1] + right0[1] + p.step_width_m / 2.0])
+            .collect();
+        let left0 = [right0[0], right0[1] + p.step_width_m];
+        Self {
+            p,
+            strategy,
+            dt: dt_s,
+            steps: vec![plan[0], left0],
+            stance: plan[0],
+            next: plan[1],
+            liftoff: left0,
+            left0,
+            step_idx: 0,
+            preview: Preview::new(dt_s, p.omega() * p.omega(), (1.6 / dt_s) as usize),
+            reference: None,
+            esum: [0.0, 0.0],
+            plan,
+        }
+    }
+
+    fn zref(&self, t: f64) -> [f64; 2] {
+        let mid = [
+            (self.plan[0][0] + self.left0[0]) / 2.0,
+            (self.plan[0][1] + self.left0[1]) / 2.0,
+        ];
         if t < START_S {
             let u = ((t - (START_S - 0.4)) / 0.4).clamp(0.0, 1.0);
-            [0.0, plan[0][1] * u]
+            [
+                mid[0] + (self.plan[0][0] - mid[0]) * u,
+                mid[1] + (self.plan[0][1] - mid[1]) * u,
+            ]
         } else {
-            plan[(((t - START_S) / p.step_s) as usize).min(plan.len() - 1)]
+            self.plan[(((t - START_S) / self.p.step_s) as usize).min(self.plan.len() - 1)]
         }
-    };
-    let mut steps = vec![plan[0], left0];
-    let mut stance = plan[0];
-    let mut next = plan[1];
-    let mut liftoff = left0;
-    let mut c = [0.0, 0.0];
-    let mut cd = [0.0, 0.0];
-    let preview = Preview::new(dt, w2, (1.6 / dt) as usize);
-    let mut acc_cmd = [0.0, 0.0];
-    let mut esum = [0.0, 0.0];
-    let mut frames = Vec::new();
-    let mut fell = None;
-    let (mut ev, mut zmp_sat) = (Vec::new(), 0usize);
-    let total = (duration_s / dt) as usize;
-    let mut step_idx = 0usize;
-    for k in 0..total {
-        let t = k as f64 * dt;
+    }
+
+    /// Replaces the current stance foot with where it actually landed (a robot's
+    /// swing foot rarely lands exactly on target). Footholds planned afterwards
+    /// start from it, and the support region follows it.
+    pub fn set_stance_position(&mut self, centre: [f64; 2]) {
+        self.stance = centre;
+        if let Some(last) = self.steps.last_mut() {
+            *last = centre;
+        }
+    }
+
+    /// Advances to time `t` with the measured CoM position and velocity.
+    pub fn update(&mut self, t: f64, c: [f64; 2], cd: [f64; 2]) -> WalkerOutput {
+        let p = self.p;
+        let w = p.omega();
+        let w2 = w * w;
+        let ewt = (w * p.step_s).exp();
         let walking = t >= START_S;
         let s_idx = if walking {
             ((t - START_S) / p.step_s) as usize
         } else {
             0
         };
-        if s_idx != step_idx {
-            step_idx = s_idx;
-            liftoff = stance;
-            stance = next;
-            steps.push(stance);
-            next = if dcm_stepping {
-                let side = if (step_idx + 1) % 2 == 0 { -1.0 } else { 1.0 };
-                [stance[0] + p.step_length_m, stance[1] + side * p.step_width_m]
+        let dcm_stepping = self.strategy == Strategy::DcmStepAdjustment;
+        // step index 0 stands on the right foot; even indices are right
+        let right_y_sign = |idx: usize| if idx % 2 == 0 { -1.0 } else { 1.0 };
+        if s_idx != self.step_idx {
+            self.step_idx = s_idx;
+            self.liftoff = self.stance;
+            self.stance = self.next;
+            self.steps.push(self.stance);
+            self.next = if dcm_stepping {
+                let side = right_y_sign(s_idx + 1);
+                [self.stance[0] + p.step_length_m, self.stance[1] + side * p.step_width_m]
             } else {
-                plan[(step_idx + 1).min(plan.len() - 1)]
+                self.plan[(s_idx + 1).min(self.plan.len() - 1)]
             };
         }
         let tau = if walking {
-            t - START_S - step_idx as f64 * p.step_s
+            t - START_S - s_idx as f64 * p.step_s
         } else {
             0.0
         };
         let dcm = [c[0] + cd[0] / w, c[1] + cd[1] / w];
-        // support region: both feet before walking, stance foot afterwards
-        let (lo, hi) = if walking {
+        let stance = self.stance;
+        let support = if walking {
             (
                 [stance[0] - p.foot_size_m.0 / 2.0, stance[1] - p.foot_size_m.1 / 2.0],
                 [stance[0] + p.foot_size_m.0 / 2.0, stance[1] + p.foot_size_m.1 / 2.0],
             )
         } else {
             (
-                [-p.foot_size_m.0 / 2.0, plan[0][1] - p.foot_size_m.1 / 2.0],
-                [p.foot_size_m.0 / 2.0, left0[1] + p.foot_size_m.1 / 2.0],
+                [
+                    self.plan[0][0].min(self.left0[0]) - p.foot_size_m.0 / 2.0,
+                    self.plan[0][1].min(self.left0[1]) - p.foot_size_m.1 / 2.0,
+                ],
+                [
+                    self.plan[0][0].max(self.left0[0]) + p.foot_size_m.0 / 2.0,
+                    self.plan[0][1].max(self.left0[1]) + p.foot_size_m.1 / 2.0,
+                ],
             )
         };
         let zmp_des = if dcm_stepping {
             if walking {
-                let side = if (step_idx + 1) % 2 == 0 { -1.0 } else { 1.0 };
+                let side = right_y_sign(s_idx + 1);
                 let b = [p.step_length_m / (ewt - 1.0), -side * p.step_width_m / (ewt + 1.0)];
                 let er = (w * (p.step_s - tau)).exp();
                 let xi_td = [
@@ -258,7 +352,7 @@ pub fn walk(p: LipmParams, dcm_stepping: bool, duration_s: f64, push: bool) -> H
                     dy.clamp(-p.max_reach_m, -0.12)
                 };
                 if tau < p.step_s - 0.05 {
-                    next = [stance[0] + dx, stance[1] + dy];
+                    self.next = [stance[0] + dx, stance[1] + dy];
                 }
                 // DCM error feedback inside the foot: p = f + (1 + k)(xi - xi_nominal)
                 let b_cur = [p.step_length_m / (ewt - 1.0), side * p.step_width_m / (ewt + 1.0)];
@@ -272,27 +366,87 @@ pub fn walk(p: LipmParams, dcm_stepping: bool, duration_s: f64, push: bool) -> H
             } else {
                 // drive the DCM to its steady-walking value at the first step
                 let b0 = [p.step_length_m / (ewt - 1.0), p.step_width_m / (ewt + 1.0)];
-                let u = (t / START_S).clamp(0.0, 1.0);
-                let tgt = [plan[0][0] + b0[0] * u * u, (plan[0][1] + b0[1]) * u * u];
+                let u = (t / (0.7 * START_S)).clamp(0.0, 1.0);
+                let u = u * u * (3.0 - 2.0 * u);
+                let mid = [
+                    (self.plan[0][0] + self.left0[0]) / 2.0,
+                    (self.plan[0][1] + self.left0[1]) / 2.0,
+                ];
+                let tgt0 = [self.plan[0][0] + b0[0], self.plan[0][1] + b0[1]];
+                let tgt = [mid[0] + (tgt0[0] - mid[0]) * u, mid[1] + (tgt0[1] - mid[1]) * u];
                 [dcm[0] + 1.5 * (dcm[0] - tgt[0]), dcm[1] + 1.5 * (dcm[1] - tgt[1])]
             }
         } else {
+            // Preview control generates the CoM reference on its own cart-table
+            // model (Kajita 2003); a DCM stabilizer tracks it with the ZMP.
+            let mut r = self.reference.unwrap_or([[c[0], 0.0, 0.0], [c[1], 0.0, 0.0]]);
+            let mut p_ref = [0.0, 0.0];
+            for ax in 0..2 {
+                let x = DVector::from_vec(r[ax].to_vec());
+                self.esum[ax] += self.preview.c.dot(&x) - self.zref(t)[ax];
+                let mut u = -self.preview.ki * self.esum[ax] - self.preview.kx.dot(&x);
+                for (j, g) in self.preview.gp.iter().enumerate().skip(1) {
+                    u -= g * self.zref(t + j as f64 * self.dt)[ax];
+                }
+                let xn = &self.preview.a * &x + &self.preview.b * u;
+                r[ax] = [xn[0], xn[1], xn[2]];
+                p_ref[ax] = self.preview.c.dot(&xn);
+            }
+            self.reference = Some(r);
+            let k_fb = 1.0;
             let mut z = [0.0, 0.0];
             for ax in 0..2 {
-                let x = DVector::from_vec(vec![c[ax], cd[ax], acc_cmd[ax]]);
-                esum[ax] += preview.c.dot(&x) - zref(t)[ax];
-                let mut u = -preview.ki * esum[ax] - preview.kx.dot(&x);
-                for (j, g) in preview.gp.iter().enumerate().skip(1) {
-                    u -= g * zref(t + j as f64 * dt)[ax];
-                }
-                let xn = &preview.a * &x + &preview.b * u;
-                acc_cmd[ax] = xn[2];
-                z[ax] = c[ax] - acc_cmd[ax] / w2;
+                let xi_ref = r[ax][0] + r[ax][1] / w;
+                z[ax] = p_ref[ax] + (1.0 + k_fb) * (dcm[ax] - xi_ref);
             }
+            let _ = w2;
             z
         };
-        let zmp = [zmp_des[0].clamp(lo[0], hi[0]), zmp_des[1].clamp(lo[1], hi[1])];
-        if walking && (zmp[0] - zmp_des[0]).abs() + (zmp[1] - zmp_des[1]).abs() > 1e-3 {
+        WalkerOutput {
+            zmp_des,
+            support,
+            double_support: !walking,
+            stance,
+            stance_left: s_idx % 2 == 1,
+            swing: (
+                if walking { self.liftoff } else { self.left0 },
+                self.next,
+                if walking { tau / p.step_s } else { 0.0 },
+            ),
+            step_index: s_idx,
+        }
+    }
+}
+
+/// Simulates point-mass LIPM walking with a [`LipmWalker`]; `push` enables [`PUSH`].
+pub fn walk(p: LipmParams, dcm_stepping: bool, duration_s: f64, push: bool) -> HumanoidRun {
+    let dt = 0.005;
+    let w = p.omega();
+    let w2 = w * w;
+    let strategy = if dcm_stepping {
+        Strategy::DcmStepAdjustment
+    } else {
+        Strategy::PreviewFixedSteps
+    };
+    let mut walker = LipmWalker::new(
+        p,
+        strategy,
+        dt,
+        [0.0, -p.step_width_m / 2.0],
+        (duration_s / p.step_s) as usize + 8,
+    );
+    let mut c = [0.0, 0.0];
+    let mut cd = [0.0, 0.0];
+    let mut frames = Vec::new();
+    let mut fell = None;
+    let (mut ev, mut zmp_sat) = (Vec::new(), 0usize);
+    let total = (duration_s / dt) as usize;
+    for k in 0..total {
+        let t = k as f64 * dt;
+        let out = walker.update(t, c, cd);
+        let (lo, hi) = out.support;
+        let zmp = [out.zmp_des[0].clamp(lo[0], hi[0]), out.zmp_des[1].clamp(lo[1], hi[1])];
+        if !out.double_support && (zmp[0] - out.zmp_des[0]).abs() + (zmp[1] - out.zmp_des[1]).abs() > 1e-3 {
             zmp_sat += 1;
         }
         if fell.is_none() {
@@ -305,7 +459,7 @@ pub fn walk(p: LipmParams, dcm_stepping: bool, duration_s: f64, push: bool) -> H
                 cd[ax] += (w2 * (c[ax] - zmp[ax]) + f[ax]) * dt;
                 c[ax] += cd[ax] * dt;
             }
-            let support = if walking { stance } else { [0.0, 0.0] };
+            let support = if out.double_support { [0.0, 0.0] } else { out.stance };
             if (c[0] - support[0]).hypot(c[1] - support[1]) > 0.55 {
                 fell = Some(t);
             }
@@ -319,20 +473,15 @@ pub fn walk(p: LipmParams, dcm_stepping: bool, duration_s: f64, push: bool) -> H
                 com: c,
                 zmp,
                 dcm: [c[0] + cd[0] / w, c[1] + cd[1] / w],
-                stance,
-                swing: (liftoff, next, if walking { tau / p.step_s } else { 0.0 }),
-                steps: steps.clone(),
+                stance: out.stance,
+                swing: out.swing,
+                steps: walker.steps.clone(),
                 fallen: fell.is_some(),
             });
         }
     }
-    let name = if dcm_stepping {
-        "DCM + step adjustment"
-    } else {
-        "ZMP preview (fixed steps)"
-    };
     let run = Run {
-        name: name.into(),
+        name: strategy.name().into(),
         log: Default::default(),
         metrics: vec![
             ("fell".into(), if fell.is_some() { 1.0 } else { 0.0 }),

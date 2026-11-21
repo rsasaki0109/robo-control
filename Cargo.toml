@@ -19,3 +19,8 @@ opt-level = 1
 
 [profile.test]
 opt-level = 2
+
+[workspace]
+members = [".", "rne"]
+# `cargo test` at the root stays light; the RNE bridge builds with `-p robo-control-rne`.
+default-members = ["."]

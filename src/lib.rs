@@ -22,6 +22,7 @@
 
 pub mod controllers;
 pub mod ilqr;
+pub mod legged3d;
 pub mod lqr;
 pub mod metrics;
 pub mod model;

@@ -41,6 +41,23 @@ pub fn box_qp(
     z
 }
 
+/// [`box_qp`] started from the projected unconstrained optimum `-H^-1 g`
+/// (exact when no bound is active; a far better start than zero when `H` is
+/// ill-conditioned, as in force-based MPC).
+pub fn box_qp_newton_start(
+    h: &DMatrix<f64>,
+    g: &DVector<f64>,
+    lo: &DVector<f64>,
+    hi: &DVector<f64>,
+    iterations: usize,
+) -> DVector<f64> {
+    let z0 = match h.clone().cholesky() {
+        Some(c) => -c.solve(g),
+        None => DVector::zeros(g.len()),
+    };
+    box_qp(h, g, lo, hi, z0, iterations)
+}
+
 /// LTV-MPC controller.
 #[derive(Debug, Clone)]
 pub struct LtvMpc {

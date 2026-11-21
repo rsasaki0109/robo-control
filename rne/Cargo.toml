@@ -1,0 +1,21 @@
+[package]
+name = "robo-control-rne"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+description = "Runs robo-control's legged controllers on Robot Native Engine's articulated Unitree Go2 and G1."
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+robo-control = { path = ".." }
+nalgebra = "0.33"
+# RNE pinned to a commit so results are reproducible.
+rne_dynamics = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "8ff1cb4" }
+rne_locomotion = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "8ff1cb4" }
+rne_math = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "8ff1cb4" }
+rne_physics = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "8ff1cb4" }
+rne_urdf_import = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "8ff1cb4" }
+rne_ecs = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "8ff1cb4" }
+rne_robot = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "8ff1cb4" }
+rne_world = { git = "https://github.com/rsasaki0109/RobotNativeEngine", rev = "8ff1cb4" }
