@@ -304,6 +304,11 @@ impl<'a> Go2Sim<'a> {
 
     /// Advances 2 ms with world velocity command `v_cmd` and a push on the base.
     pub fn step(&mut self, v_cmd: [f64; 2], push: Vec3) -> Go2Tick {
+        self.step_heading(v_cmd, 0.0, 0.0, push)
+    }
+
+    /// [`Self::step`] with a heading `yaw_rad` and its rate to track.
+    pub fn step_heading(&mut self, v_cmd: [f64; 2], yaw_rad: f64, yaw_rate_radps: f64, push: Vec3) -> Go2Tick {
         let cfg = self.cfg;
         let dt = 0.002;
         let ctrl_every = (cfg.control_dt_s / dt).round().max(1.0) as usize;
@@ -339,8 +344,8 @@ impl<'a> Go2Sim<'a> {
         let cmd = SrbCommand {
             velocity_mps: v_cmd,
             height_m: ground_mean + cfg.height_m,
-            yaw_rad: 0.0,
-            yaw_rate_radps: 0.0,
+            yaw_rad,
+            yaw_rate_radps,
         };
         // swing planning
         let left = if walking { gait.phase_left_s(gt) } else { 1.0 };
@@ -349,7 +354,7 @@ impl<'a> Go2Sim<'a> {
                 self.liftoff[i] = feet[i];
             }
             if !stance[i] {
-                let hip_now = base + r * na(legs[i].hip_offset_m) + Vector3::new(0.0, legs[i].thigh_offset_y_m, 0.0);
+                let hip_now = base + r * (na(legs[i].hip_offset_m) + Vector3::new(0.0, legs[i].thigh_offset_y_m, 0.0));
                 let hip_td = hip_now + state.velocity_mps * left;
                 let mut td = raibert_foothold(hip_td, state.velocity_mps, v_cmd, cfg.period_s / 2.0, 0.06, 0.0);
                 td.z = ground(td.x, td.y);

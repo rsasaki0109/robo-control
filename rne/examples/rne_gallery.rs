@@ -389,14 +389,14 @@ fn main() -> std::io::Result<()> {
         let p = go2::go2_srb(&q);
         let cfg = go2::Go2Config {
             pushes: false,
-            stairs_rise_m: 0.10,
+            stairs_rise_m: 0.08,
             swing_height_m: 0.12,
             duration_s: 9.0,
             ..Default::default()
         };
         let mut ctrls: Vec<Box<dyn ForceController>> = vec![Box::new(PdForceQp::new(p)), Box::new(ConvexMpc3d::new(p))];
         let runs: Vec<go2::Go2Run> = ctrls.iter_mut().map(|c| go2::run(c.as_mut(), &cfg)).collect();
-        go2_gif(&runs, "go2_stairs", "RNE GO2 UP 5 STAIRS (10 CM RISE, 30 CM TREAD)")?;
+        go2_gif(&runs, "go2_stairs", "RNE GO2 UP 5 STAIRS (8 CM RISE, 30 CM TREAD)")?;
         let rows: Vec<_> = runs.iter().map(|r| (r.name.clone(), r.metrics.clone())).collect();
         let _ = writeln!(md, "## go2 stairs\n\n{}", table(&rows));
     }
