@@ -2,7 +2,7 @@
 
 use robo_control::legged3d::{ConvexMpc3d, PdForceQp};
 use robo_control::scenarios::humanoid::Strategy;
-use robo_control_rne::{g1, go2};
+use robo_control_rne::{g1, go2, mission};
 
 #[test]
 fn go2_trots_through_both_pushes_and_mpc_tracks_speed_better() {
@@ -105,5 +105,31 @@ fn go2_climbs_five_eight_centimetre_stairs() {
             f.base_m[0]
         );
         assert!(f.base_m[2] > 0.7, "{} base z {}", r.name, f.base_m[2]);
+    }
+}
+
+#[test]
+fn go2_walks_the_warehouse_mission_with_both_controllers() {
+    let p = go2::go2_srb(&rne_locomotion::Quadruped::go2().unwrap());
+    for r in [
+        mission::warehouse(&mut PdForceQp::new(p)),
+        mission::warehouse(&mut ConvexMpc3d::new(p)),
+    ] {
+        let m = |k: &str| r.metrics.iter().find(|(n, _)| n == k).unwrap().1;
+        assert_eq!(m("fell"), 0.0, "{} fell", r.name);
+        assert!(m("rms_cte_m") < 0.06, "{}: {:?}", r.name, r.metrics);
+        assert!(
+            m("min_clearance_m") > 0.0,
+            "{} touched a shelf: {:?}",
+            r.name,
+            r.metrics
+        );
+        assert!(m("goal_err_m") < 0.15, "{}: {:?}", r.name, r.metrics);
+        assert!(
+            m("arrival_s") < m("plan_duration_s") + 4.0,
+            "{}: {:?}",
+            r.name,
+            r.metrics
+        );
     }
 }

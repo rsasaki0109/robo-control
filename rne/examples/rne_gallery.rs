@@ -3,14 +3,14 @@
 //!
 //! ```bash
 //! cargo run --release -p robo-control-rne --example rne_gallery        # out/rne/{go2,g1}.gif + README.md
-//! cargo run --release -p robo-control-rne --example rne_gallery g1     # one of: go2 g1 go2_terrain go2_stairs g1_ramp fleet
+//! cargo run --release -p robo-control-rne --example rne_gallery g1     # one of: go2 g1 go2_terrain go2_stairs g1_ramp fleet go2_mission
 //! ```
 
 use robo_control::legged3d::{ConvexMpc3d, ForceController, PdForceQp};
 use robo_control::robo_planning::render::{colors, Canvas, GifWriter, Rgba, View};
 use robo_control::robo_planning::{Pose2, Vec2};
 use robo_control::scenarios::humanoid::{Strategy, PUSH};
-use robo_control_rne::{fleet, g1, go2};
+use robo_control_rne::{fleet, g1, go2, mission};
 use std::fmt::Write as _;
 
 const OUT: &str = "out/rne";
@@ -326,6 +326,52 @@ fn fleet_gif(runs: &[fleet::FleetRun]) -> std::io::Result<()> {
     Ok(())
 }
 
+fn mission_gif(runs: &[mission::MissionRun]) -> std::io::Result<()> {
+    let (w, h) = (900u32, 600u32);
+    let mut gif = GifWriter::create(format!("{OUT}/go2_mission.gif"), w, h)?;
+    let map = &runs[0].map;
+    let v = View::fit(map.min, map.max, 10.0, 40.0, 880.0, 520.0);
+    let reference: Vec<Vec2> = runs[0].reference.iter().map(|p| Vec2::new(p.p.x, p.p.y)).collect();
+    let nf = runs.iter().map(|r| r.frames.len()).min().unwrap();
+    for fi in (0..nf).step_by(5) {
+        let mut c = Canvas::new(w, h);
+        title(&mut c, "RNE GO2 WAREHOUSE MISSION: A* PLAN + FORCE CONTROL");
+        c.map(&v, map);
+        c.polyline(&v, &reference, colors::INK.alpha(90), 2.0);
+        c.label(
+            14.0,
+            568.0,
+            &format!("T {:.1} S", runs[0].frames[fi].t),
+            1.4,
+            colors::INK,
+        );
+        for (k, r) in runs.iter().enumerate() {
+            let col = colors::series(k);
+            let tr: Vec<Vec2> = r.frames[..=fi]
+                .iter()
+                .map(|f| Vec2::new(f.base[0], f.base[1]))
+                .collect();
+            c.polyline(&v, &tr, col, 2.0);
+            let f = &r.frames[fi];
+            let pose = Pose2::new(f.base[0], f.base[1], f.yaw);
+            let (bx, by) = v.px(pose.pos());
+            c.ring_px(bx, by, mission::GO2_RADIUS_M as f32 * v.scale(), col.alpha(110), 1.0);
+            c.oriented_box(&v, pose, 0.7, 0.31, col);
+            c.arrow(&v, pose, 0.5, col, 2.0);
+            let m = |key: &str| r.metrics.iter().find(|(k2, _)| k2 == key).map_or(f64::NAN, |(_, v)| *v);
+            let txt = format!(
+                "{}: RMS CTE {:.3} M, CLEAR {:.2} M",
+                r.name.to_uppercase(),
+                m("rms_cte_m"),
+                m("min_clearance_m")
+            );
+            c.label(110.0 + k as f32 * 390.0, 568.0, &txt, 1.4, col);
+        }
+        gif.frame(&c, 5)?;
+    }
+    Ok(())
+}
+
 fn main() -> std::io::Result<()> {
     let only: Vec<String> = std::env::args().skip(1).collect();
     let on = |n: &str| only.is_empty() || only.iter().any(|o| o == n);
@@ -432,6 +478,16 @@ fn main() -> std::io::Result<()> {
         fleet_gif(&runs)?;
         let rows: Vec<_> = runs.iter().map(|r| (r.name.clone(), r.metrics.clone())).collect();
         let _ = writeln!(md, "## fleet\n\n{}", table(&rows));
+    }
+    if on("go2_mission") {
+        let p = go2::go2_srb(&rne_locomotion::Quadruped::go2().expect("Go2"));
+        let runs = vec![
+            mission::warehouse(&mut PdForceQp::new(p)),
+            mission::warehouse(&mut ConvexMpc3d::new(p)),
+        ];
+        mission_gif(&runs)?;
+        let rows: Vec<_> = runs.iter().map(|r| (r.name.clone(), r.metrics.clone())).collect();
+        let _ = writeln!(md, "## go2 warehouse mission\n\n{}", table(&rows));
     }
     std::fs::create_dir_all(OUT)?;
     std::fs::write(format!("{OUT}/README.md"), &md)?;

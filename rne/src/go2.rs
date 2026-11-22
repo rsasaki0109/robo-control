@@ -297,6 +297,11 @@ impl<'a> Go2Sim<'a> {
         (na(bs.position_m), na(bs.linear_velocity_m_s))
     }
 
+    /// Base heading (yaw) [rad].
+    pub fn yaw(&self) -> f64 {
+        rotation(self.sim.base_state().rotation).euler_angles().2
+    }
+
     /// Controller name.
     pub fn controller_name(&self) -> String {
         self.controller.name().to_string()

@@ -14,6 +14,7 @@
 pub mod fleet;
 pub mod g1;
 pub mod go2;
+pub mod mission;
 
 /// Converts an RNE vector to nalgebra.
 pub fn na(v: rne_math::Vec3) -> nalgebra::Vector3<f64> {

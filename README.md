@@ -59,13 +59,18 @@ the plant, robo-control decides.
 | ![go2 terrain](docs/media/rne_go2_terrain.gif) | ![go2 stairs](docs/media/rne_go2_stairs.gif) | ![g1 ramp](docs/media/rne_g1_ramp.gif) |
 | Seeded fractal terrain, +-10 cm with 4 cm terraces under the path: footholds and the ride height follow the ground. | Five 8 cm steps with 30 cm treads (a 1 cm height field, so the risers are near vertical); swing apex 12 cm. | A 5 % ramp up to 6 cm, pushed mid-climb: contacts, swing heights and the CoM height follow the ground. |
 
+| Planning + control: Go2 crosses the warehouse |
+|:---:|
+| ![go2 warehouse mission](docs/media/rne_go2_mission.gif) |
+| robot-planning plans the route on its warehouse scene (A* on a grid inflated by the Go2's 0.38 m footprint, line-of-sight pruning, a spline and a speed profile capped at 0.7 m/s and 0.4 m/s^2 lateral). The Go2 is commanded the reference velocity plus position feedback, and faces along the path (heading and yaw rate from the tangent and curvature). PD + force QP (blue) vs convex MPC (orange) walk the 63 s route; both arrive on schedule, and the MPC holds tighter in the turns (max cross-track 5 cm vs 16 cm) and keeps more clearance from the shelves. |
+
 | Four Go2s swapping corners |
 |:---:|
 | ![fleet](docs/media/rne_fleet.gif) |
 | Each Go2 trots with its own convex MPC on RNE; velocity commands come from robot-planning's multi-robot methods: decentralised reciprocal avoidance (left) vs prioritized space-time A* with a 0.9 m separation (right). The robots run in separate simulations, so the separation they keep is what is measured. |
 
 ```bash
-cargo run --release -p robo-control-rne --example rne_gallery     # out/rne/{go2,g1,go2_terrain,go2_stairs,g1_ramp,fleet}.gif + metrics
+cargo run --release -p robo-control-rne --example rne_gallery     # out/rne/{go2,g1,go2_terrain,go2_stairs,g1_ramp,fleet,go2_mission}.gif + metrics
 cargo test --release -p robo-control-rne                          # asserts the results below
 ```
 
@@ -107,6 +112,13 @@ cargo test --release -p robo-control-rne                          # asserts the 
 | ZMP preview (fixed steps) (ramp, push) | 1.000 | 4.086 | 0.093 | 0.824 | 0.593 |
 | DCM + step adjustment (ramp, push) | 0.000 | NaN | 0.057 | 2.357 | 0.131 |
 
+#### Go2 warehouse mission (A* + spline plan, 63 s)
+
+| controller | fell | rms_cte_m | max_cte_m | min_clearance_m | arrival_s | plan_duration_s | goal_err_m |
+|---|---|---|---|---|---|---|---|
+| PD + force QP | 0.000 | 0.028 | 0.157 | 0.031 | 63.528 | 63.579 | 0.000 |
+| convex MPC | 0.000 | 0.024 | 0.052 | 0.089 | 62.574 | 63.579 | 0.029 |
+
 #### Four Go2s swapping corners
 
 | controller | min_separation_m | all_arrived_s | max_final_err_m | fallen |
@@ -126,7 +138,7 @@ What carried over and what did not:
   5 cm-wide sole cannot absorb the accumulated error without moving the feet.
   In the point-mass scenario, where swing legs are perfect, it only fails
   under the push.
-- **Stairs**: the Go2 climbs five 8 cm steps (0.4 m) with either force controller for any swing apex from 10 to 14 cm, and the MPC tracks speed far better on the way (0.09 vs 0.22 m/s RMS). 10 cm steps are marginal: both climb with a 10 cm apex, but the MPC falls with 12-14 cm; 12 cm steps defeat both. Its point feet need no foothold selection, which is exactly what the G1 lacks (below).
+- **Stairs**: the Go2 climbs five 8 cm steps (0.4 m) with either force controller for any swing apex from 10 to 14 cm, and the MPC tracks speed far better on the way (0.09 vs 0.20 m/s RMS). 10 cm steps are marginal: both climb with a 10 cm apex, but the MPC falls with 12-14 cm; 12 cm steps defeat both. Its point feet need no foothold selection, which is exactly what the G1 lacks (below).
 - **Terrain**: both Go2 controllers trot over +-10 cm terraced terrain (the MPC with half the tilt); the G1 with DCM stepping climbs a 5 % ramp through the push while fixed footsteps fall. Stairs are not there yet, for a geometric reason. With edges midway between footholds the sole clears an edge by step/2 - 0.085 m: 1.5 cm at 0.2 m steps, while the swing feet land within about 3 cm. A safe margin needs steps of 0.25 m or more, which this G1 controller does not walk stably even on the flat. Tread-centred footholds (with hysteresis), riser contacts with a horizontal normal and a task-space swing-foot task were all tried; none made the climb robust, so none is shipped.
 - **Fleet**: both methods bring the four Go2s home without overlap. Reciprocal avoidance squeezes past at 6 cm and finishes first (17.0 s); prioritized planning keeps its reserved 0.9 m separation (0.2 m of air) and takes 18.3 s. On a 0.5 m grid it first planned overlapping robots, which is why `prioritized_plan` now takes a separation larger than one cell.
 - Three things were needed beyond the point-mass walker: telling the walker
