@@ -8,6 +8,8 @@ cart-pole. Reference paths come from
 機体（車輪型・犬型・ヒューマノイド・アーム・ドローン・倒立振子）ごとに、
 合う制御則を同じタスクで比較シミュレーションするライブラリです。
 
+![robo-control hero](docs/media/hero.gif)
+
 ## Gallery by robot body
 
 ### Wheeled
@@ -265,6 +267,13 @@ cargo test --release -p robo-control-rne   # Go2 / G1 on RNE (first build fetche
 
 Everything is deterministic: fixed-step RK4 / semi-implicit Euler, no wall clock,
 seeded noise.
+
+The hero GIF at the top tiles the gallery GIFs in `docs/media/` (needs Pillow; see the
+script's docstring for the arguments):
+
+```bash
+python3 scripts/hero_gif.py docs/media/hero.gif "TITLE" docs/media/a.gif:"Caption" ...
+```
 
 ## License
 
