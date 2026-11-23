@@ -3,14 +3,14 @@
 //!
 //! ```bash
 //! cargo run --release -p robo-control-rne --example rne_gallery        # out/rne/{go2,g1}.gif + README.md
-//! cargo run --release -p robo-control-rne --example rne_gallery g1     # one of: go2 g1 go2_terrain go2_stairs g1_ramp fleet go2_mission
+//! cargo run --release -p robo-control-rne --example rne_gallery g1     # one of: go2 g1 go2_terrain go2_stairs g1_ramp fleet go2_mission go2_crowd
 //! ```
 
 use robo_control::legged3d::{ConvexMpc3d, ForceController, PdForceQp};
 use robo_control::robo_planning::render::{colors, Canvas, GifWriter, Rgba, View};
 use robo_control::robo_planning::{Pose2, Vec2};
 use robo_control::scenarios::humanoid::{Strategy, PUSH};
-use robo_control_rne::{fleet, g1, go2, mission};
+use robo_control_rne::{crowd, fleet, g1, go2, mission};
 use std::fmt::Write as _;
 
 const OUT: &str = "out/rne";
@@ -372,6 +372,65 @@ fn mission_gif(runs: &[mission::MissionRun]) -> std::io::Result<()> {
     Ok(())
 }
 
+fn crowd_gif(runs: &[crowd::CrowdRun]) -> std::io::Result<()> {
+    let (w, h) = (900u32, 600u32);
+    let mut gif = GifWriter::create(format!("{OUT}/go2_crowd.gif"), w, h)?;
+    let map = &runs[0].map;
+    let v = View::fit(map.min, map.max, 10.0, 40.0, 880.0, 520.0);
+    let reference: Vec<Vec2> = runs[0].reference.iter().map(|p| Vec2::new(p.p.x, p.p.y)).collect();
+    let nf = runs.iter().map(|r| r.frames.len()).min().unwrap();
+    let mover_col = Rgba::rgb(120, 90, 160);
+    for fi in (0..nf).step_by(5) {
+        let t = runs[0].frames[fi].t;
+        let mut c = Canvas::new(w, h);
+        title(&mut c, "RNE GO2 AMONG PEOPLE AND A CART: NO AVOIDANCE / DWA / MPPI");
+        c.map(&v, map);
+        c.polyline(&v, &reference, colors::INK.alpha(60), 2.0);
+        for m in &runs[0].movers {
+            c.segments(&v, &[(m.a, m.b)], mover_col.alpha(60), 1.0);
+            c.disc(&v, m.pos(t), m.radius_m, mover_col.alpha(200));
+        }
+        c.label(14.0, 568.0, &format!("T {t:.1} S"), 1.4, colors::INK);
+        for (k, r) in runs.iter().enumerate() {
+            let col = colors::series(k);
+            let f = &r.frames[fi];
+            let tr: Vec<Vec2> = r.frames[..=fi]
+                .iter()
+                .map(|f| Vec2::new(f.base[0], f.base[1]))
+                .collect();
+            c.polyline(&v, &tr, col.alpha(150), 1.5);
+            if f.local.len() > 1 {
+                c.polyline(&v, &f.local, col, 2.5);
+            }
+            let pose = Pose2::new(f.base[0], f.base[1], f.yaw);
+            let hit = r
+                .movers
+                .iter()
+                .any(|m| pose.pos().dist(m.pos(t)) < m.radius_m + mission::GO2_RADIUS_M);
+            let (bx, by) = v.px(pose.pos());
+            let ring = if hit { Rgba::rgb(220, 30, 30) } else { col.alpha(110) };
+            c.ring_px(
+                bx,
+                by,
+                mission::GO2_RADIUS_M as f32 * v.scale(),
+                ring,
+                if hit { 3.0 } else { 1.0 },
+            );
+            c.oriented_box(&v, pose, 0.7, 0.31, col);
+            let m = |key: &str| r.metrics.iter().find(|(k2, _)| k2 == key).map_or(f64::NAN, |(_, v)| *v);
+            let txt = format!(
+                "{}: {} HITS, GAP {:+.2}",
+                r.method.name().to_uppercase(),
+                m("contacts"),
+                m("min_gap_m")
+            );
+            c.label(100.0 + k as f32 * 270.0, 568.0, &txt, 1.4, col);
+        }
+        gif.frame(&c, 5)?;
+    }
+    Ok(())
+}
+
 fn main() -> std::io::Result<()> {
     let only: Vec<String> = std::env::args().skip(1).collect();
     let on = |n: &str| only.is_empty() || only.iter().any(|o| o == n);
@@ -488,6 +547,63 @@ fn main() -> std::io::Result<()> {
         mission_gif(&runs)?;
         let rows: Vec<_> = runs.iter().map(|r| (r.name.clone(), r.metrics.clone())).collect();
         let _ = writeln!(md, "## go2 warehouse mission\n\n{}", table(&rows));
+    }
+    if on("go2_crowd") {
+        let p = go2::go2_srb(&rne_locomotion::Quadruped::go2().expect("Go2"));
+        let methods = [crowd::Avoidance::None, crowd::Avoidance::Dwa, crowd::Avoidance::Mppi];
+        let runs: Vec<_> = methods
+            .iter()
+            .map(|m| crowd::warehouse_crowd(&mut ConvexMpc3d::new(p), *m))
+            .collect();
+        crowd_gif(&runs)?;
+        let rows: Vec<_> = runs
+            .iter()
+            .map(|r| (r.method.name().to_string(), r.metrics.clone()))
+            .collect();
+        let _ = writeln!(
+            md,
+            "## go2 crowd (cart phase {} s)\n\n{}",
+            crowd::CART_PHASE_S,
+            table(&rows)
+        );
+        // the same over eight cart timings, run in parallel
+        let phases: Vec<f64> = (0..8).map(|i| i as f64 * 1.4).collect();
+        let mut sweep = Vec::new();
+        for m in methods {
+            let runs: Vec<crowd::CrowdRun> = std::thread::scope(|s| {
+                let hs: Vec<_> = phases
+                    .iter()
+                    .map(|ph| s.spawn(move || crowd::warehouse_crowd_with(&mut ConvexMpc3d::new(p), m, *ph)))
+                    .collect();
+                hs.into_iter().map(|h| h.join().unwrap()).collect()
+            });
+            let get = |r: &crowd::CrowdRun, k: &str| r.metrics.iter().find(|(n, _)| n == k).unwrap().1;
+            let hit_runs = runs.iter().filter(|r| get(r, "contacts") > 0.0).count();
+            let arrivals: Vec<f64> = runs
+                .iter()
+                .map(|r| get(r, "arrival_s"))
+                .filter(|a| a.is_finite())
+                .collect();
+            sweep.push((
+                m.name().to_string(),
+                vec![
+                    ("runs".to_string(), runs.len() as f64),
+                    ("runs_with_contact".into(), hit_runs as f64),
+                    ("contacts".into(), runs.iter().map(|r| get(r, "contacts")).sum()),
+                    (
+                        "worst_min_gap_m".into(),
+                        runs.iter().map(|r| get(r, "min_gap_m")).fold(f64::INFINITY, f64::min),
+                    ),
+                    ("arrived".into(), arrivals.len() as f64),
+                    (
+                        "mean_arrival_s".into(),
+                        arrivals.iter().sum::<f64>() / arrivals.len().max(1) as f64,
+                    ),
+                    ("falls".into(), runs.iter().map(|r| get(r, "fell")).sum()),
+                ],
+            ));
+        }
+        let _ = writeln!(md, "## go2 crowd over 8 cart timings\n\n{}", table(&sweep));
     }
     std::fs::create_dir_all(OUT)?;
     std::fs::write(format!("{OUT}/README.md"), &md)?;

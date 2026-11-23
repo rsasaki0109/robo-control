@@ -66,13 +66,18 @@ the plant, robo-control decides.
 | ![go2 warehouse mission](docs/media/rne_go2_mission.gif) |
 | robot-planning plans the route on its warehouse scene (A* on a grid inflated by the Go2's 0.38 m footprint, line-of-sight pruning, a spline and a speed profile capped at 0.7 m/s and 0.4 m/s^2 lateral). The Go2 is commanded the reference velocity plus position feedback, and faces along the path (heading and yaw rate from the tangent and curvature). PD + force QP (blue) vs convex MPC (orange) walk the 63 s route; both arrive on schedule, and the MPC holds tighter in the turns (max cross-track 5 cm vs 16 cm) and keeps more clearance from the shelves. |
 
+| Go2 among people and a cart |
+|:---:|
+| ![go2 crowd](docs/media/rne_go2_crowd.gif) |
+| The same warehouse route, now with two people and a cart (purple) crossing it on fixed back-and-forth routes. Blue follows the plan blindly and walks into all three. Orange and green track the global path with a local planner and step around them: orange is robot-planning's DWA (`dwa::plan_with_movers`, constant `(v, w)` arcs checked against the movers' constant-velocity predictions), green robot-control's MPPI (sampled input sequences on a unicycle model, same predictions, a 10 cm safety margin). Over eight cart timings MPPI never touches a mover; DWA freezes once when cornered by the cart and is walked into. The movers are kinematic, so contact is measured rather than simulated; the Go2 walks with convex MPC on RNE throughout. |
+
 | Four Go2s swapping corners |
 |:---:|
 | ![fleet](docs/media/rne_fleet.gif) |
 | Each Go2 trots with its own convex MPC on RNE; velocity commands come from robot-planning's multi-robot methods: decentralised reciprocal avoidance (left) vs prioritized space-time A* with a 0.9 m separation (right). The robots run in separate simulations, so the separation they keep is what is measured. |
 
 ```bash
-cargo run --release -p robo-control-rne --example rne_gallery     # out/rne/{go2,g1,go2_terrain,go2_stairs,g1_ramp,fleet,go2_mission}.gif + metrics
+cargo run --release -p robo-control-rne --example rne_gallery     # out/rne/{go2,g1,go2_terrain,go2_stairs,g1_ramp,fleet,go2_mission,go2_crowd}.gif + metrics
 cargo test --release -p robo-control-rne                          # asserts the results below
 ```
 
@@ -120,6 +125,24 @@ cargo test --release -p robo-control-rne                          # asserts the 
 |---|---|---|---|---|---|---|---|
 | PD + force QP | 0.000 | 0.028 | 0.157 | 0.031 | 63.528 | 63.579 | 0.000 |
 | convex MPC | 0.000 | 0.024 | 0.052 | 0.089 | 62.574 | 63.579 | 0.029 |
+
+#### Go2 among people and a cart (convex MPC walking)
+
+At the default cart timing:
+
+| method | fell | contacts | contact_s | min_gap_m | min_shelf_clearance_m | arrival_s |
+|---|---|---|---|---|---|---|
+| no avoidance | 0.000 | 3.000 | 4.612 | -0.650 | 0.076 | 62.556 |
+| DWA | 0.000 | 0.000 | 0.000 | 0.039 | 0.035 | 98.978 |
+| MPPI | 0.000 | 0.000 | 0.000 | 0.173 | 0.188 | 91.994 |
+
+Over eight cart timings (0 to 9.8 s, run in parallel):
+
+| method | runs | runs_with_contact | contacts | worst_min_gap_m | arrived | mean_arrival_s | falls |
+|---|---|---|---|---|---|---|---|
+| no avoidance | 8 | 8 | 19 | -0.651 | 8 | 62.6 | 0 |
+| DWA | 8 | 1 | 1 | -0.468 | 8 | 82.4 | 0 |
+| MPPI | 8 | 0 | 0 | 0.173 | 8 | 83.4 | 0 |
 
 #### Four Go2s swapping corners
 

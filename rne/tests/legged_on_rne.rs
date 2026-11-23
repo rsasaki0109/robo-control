@@ -133,3 +133,21 @@ fn go2_walks_the_warehouse_mission_with_both_controllers() {
         );
     }
 }
+
+#[test]
+fn go2_dodges_the_warehouse_crowd_with_mppi() {
+    use robo_control_rne::crowd::{warehouse_crowd, Avoidance};
+    let p = go2::go2_srb(&rne_locomotion::Quadruped::go2().unwrap());
+    let run = |m| {
+        let r = warehouse_crowd(&mut ConvexMpc3d::new(p), m);
+        let get = |k: &str| r.metrics.iter().find(|(n, _)| n == k).unwrap().1;
+        assert_eq!(get("fell"), 0.0, "{}: {:?}", m.name(), r.metrics);
+        assert!(get("min_shelf_clearance_m") > 0.0, "{}: {:?}", m.name(), r.metrics);
+        (get("contacts"), get("min_gap_m"), get("arrival_s"))
+    };
+    let (blind, _, _) = run(Avoidance::None);
+    assert!(blind >= 2.0, "the crowd should be in the way: {blind} contacts");
+    let (hits, gap, arrival) = run(Avoidance::Mppi);
+    assert_eq!(hits, 0.0, "MPPI touched a mover (gap {gap})");
+    assert!(gap > 0.1 && arrival < 95.0, "gap {gap}, arrival {arrival}");
+}
