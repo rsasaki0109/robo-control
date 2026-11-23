@@ -66,6 +66,11 @@ the plant, robo-control decides.
 | ![go2 warehouse mission](docs/media/rne_go2_mission.gif) |
 | robot-planning plans the route on its warehouse scene (A* on a grid inflated by the Go2's 0.38 m footprint, line-of-sight pruning, a spline and a speed profile capped at 0.7 m/s and 0.4 m/s^2 lateral). The Go2 is commanded the reference velocity plus position feedback, and faces along the path (heading and yaw rate from the tangent and curvature). PD + force QP (blue) vs convex MPC (orange) walk the 63 s route; both arrive on schedule, and the MPC holds tighter in the turns (max cross-track 5 cm vs 16 cm) and keeps more clearance from the shelves. |
 
+| G1 walks the same warehouse route |
+|:---:|
+| ![g1 warehouse mission](docs/media/rne_g1_mission.gif) |
+| The humanoid on the same A* route, slowed to a G1 speed profile (0.27 m/s, 0.08 m/s^2 lateral). `LipmWalker` now turns by footsteps: each step rotates the foot by up to 0.2 rad toward a commanded heading, and the DCM footstep and ZMP laws run in the walking frame. On RNE the swing sole, the support rectangle used to clamp the ZMP, and the pelvis attitude target all follow the feet's yaw. The walker is steered toward a point 0.6 m ahead on the route, taking its step length from the speed profile: 366 steps, no fall, 7.5 cm RMS from the route, at least 8 cm from every shelf. |
+
 | Go2 among people and a cart |
 |:---:|
 | ![go2 crowd](docs/media/rne_go2_crowd.gif) |
@@ -77,7 +82,7 @@ the plant, robo-control decides.
 | Each Go2 trots with its own convex MPC on RNE; velocity commands come from robot-planning's multi-robot methods: decentralised reciprocal avoidance (left) vs prioritized space-time A* with a 0.9 m separation (right). The robots run in separate simulations, so the separation they keep is what is measured. |
 
 ```bash
-cargo run --release -p robo-control-rne --example rne_gallery     # out/rne/{go2,g1,go2_terrain,go2_stairs,g1_ramp,fleet,go2_mission,go2_crowd}.gif + metrics
+cargo run --release -p robo-control-rne --example rne_gallery     # out/rne/{go2,g1,go2_terrain,go2_stairs,g1_ramp,fleet,go2_mission,go2_crowd,g1_mission}.gif + metrics
 cargo test --release -p robo-control-rne                          # asserts the results below
 ```
 
@@ -92,11 +97,11 @@ cargo test --release -p robo-control-rne                          # asserts the 
 
 | controller | fell | fall_time_s | rms_speed_err_mps | distance_m | lateral_drift_m |
 |---|---|---|---|---|---|
-| ZMP preview (fixed steps) (push) | 1.000 | 4.084 | 0.087 | 0.827 | 0.588 |
-| DCM + step adjustment (push) | 0.000 | NaN | 0.060 | 2.068 | 0.270 |
-| ZMP preview (fixed steps) (no push) | 1.000 | 5.016 | 0.037 | 1.043 | 0.592 |
-| DCM + step adjustment (no push) | 0.000 | NaN | 0.033 | 1.994 | 0.227 |
-| DCM + step adjustment (push, ForceQpWbc) | 0.000 | NaN | 0.085 | 2.294 | -0.003 |
+| ZMP preview (fixed steps) (push) | 1.000 | 4.040 | 0.175 | 0.758 | 0.569 |
+| DCM + step adjustment (push) | 0.000 | NaN | 0.060 | 2.071 | 0.265 |
+| ZMP preview (fixed steps) (no push) | 1.000 | 4.966 | 0.021 | 1.018 | 0.578 |
+| DCM + step adjustment (no push) | 0.000 | NaN | 0.033 | 1.999 | 0.177 |
+| DCM + step adjustment (push, ForceQpWbc) | 0.000 | NaN | 0.079 | 2.251 | 0.094 |
 
 #### Go2 on terraced rough terrain (no pushes)
 
@@ -116,8 +121,8 @@ cargo test --release -p robo-control-rne                          # asserts the 
 
 | controller | fell | fall_time_s | rms_speed_err_mps | distance_m | lateral_drift_m |
 |---|---|---|---|---|---|
-| ZMP preview (fixed steps) (ramp, push) | 1.000 | 4.086 | 0.093 | 0.824 | 0.593 |
-| DCM + step adjustment (ramp, push) | 0.000 | NaN | 0.057 | 2.357 | 0.131 |
+| ZMP preview (fixed steps) (ramp, push) | 1.000 | 4.040 | 0.190 | 0.757 | 0.571 |
+| DCM + step adjustment (ramp, push) | 0.000 | NaN | 0.057 | 2.361 | 0.150 |
 
 #### Go2 warehouse mission (A* + spline plan, 63 s)
 
@@ -125,6 +130,12 @@ cargo test --release -p robo-control-rne                          # asserts the 
 |---|---|---|---|---|---|---|---|
 | PD + force QP | 0.000 | 0.028 | 0.157 | 0.031 | 63.528 | 63.579 | 0.000 |
 | convex MPC | 0.000 | 0.024 | 0.052 | 0.089 | 62.574 | 63.579 | 0.029 |
+
+#### G1 warehouse mission (DCM walker, footstep turning)
+
+| controller | fell | rms_cte_m | max_cte_m | min_clearance_m | arrival_s | plan_duration_s | goal_err_m | steps |
+|---|---|---|---|---|---|---|---|---|
+| DCM + step adjustment | 0.000 | 0.075 | 0.231 | 0.083 | 137.580 | 155.028 | 0.142 | 366 |
 
 #### Go2 among people and a cart (convex MPC walking)
 
@@ -166,6 +177,7 @@ What carried over and what did not:
 - **Stairs**: the Go2 climbs five 8 cm steps (0.4 m) with either force controller for any swing apex from 10 to 14 cm, and the MPC tracks speed far better on the way (0.09 vs 0.20 m/s RMS). 10 cm steps are marginal: both climb with a 10 cm apex, but the MPC falls with 12-14 cm; 12 cm steps defeat both. Its point feet need no foothold selection, which is exactly what the G1 lacks (below).
 - **Terrain**: both Go2 controllers trot over +-10 cm terraced terrain (the MPC with half the tilt); the G1 with DCM stepping climbs a 5 % ramp through the push while fixed footsteps fall. Stairs are not there yet, for a geometric reason. With edges midway between footholds the sole clears an edge by step/2 - 0.085 m: 1.5 cm at 0.2 m steps, while the swing feet land within about 3 cm. A safe margin needs steps of 0.25 m or more, which this G1 controller does not walk stably even on the flat. Tread-centred footholds (with hysteresis), riser contacts with a horizontal normal and a task-space swing-foot task were all tried; none made the climb robust, so none is shipped.
 - **Fleet**: both methods bring the four Go2s home without overlap. Reciprocal avoidance squeezes past at 6 cm and finishes first (17.0 s); prioritized planning keeps its reserved 0.9 m separation (0.2 m of air) and takes 18.3 s. On a 0.5 m grid it first planned overlapping robots, which is why `prioritized_plan` now takes a separation larger than one cell.
+- **Warehouse**: planning and control end to end. The Go2 follows the route with either force controller, and the convex MPC holds tighter in the turns (5 vs 16 cm). The G1 needed the walker to turn by footsteps, and the swing sole, ZMP support and pelvis to follow the feet's yaw; with that it walks the whole route (366 steps). Among moving people and a cart, MPPI with constant-velocity predictions never touched a mover over eight cart timings; DWA with the same predictions froze once when cornered and was walked into.
 - Three things were needed beyond the point-mass walker: telling the walker
   where each foot actually landed (`LipmWalker::set_stance_position`),
   switching support on measured contact rather than on the clock, and a

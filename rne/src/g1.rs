@@ -137,10 +137,16 @@ impl G1 {
     /// Damped-least-squares IK of leg `side` so its ankle reaches `target` with a
     /// flat sole facing +x. Only that leg's joints in `q` change.
     pub fn leg_ik(&self, q: &mut [f64], side: usize, target: Vector3<f64>, iters: usize) {
+        self.leg_ik_yaw(q, side, target, 0.0, iters);
+    }
+
+    /// [`Self::leg_ik`] with the flat sole facing `yaw_rad`.
+    pub fn leg_ik_yaw(&self, q: &mut [f64], side: usize, target: Vector3<f64>, yaw_rad: f64, iters: usize) {
         let dofs = self.leg_dofs[side];
+        let r_target = Rotation3::from_euler_angles(0.0, 0.0, yaw_rad);
         let err = |q: &[f64]| -> nalgebra::SVector<f64, 6> {
             let (p, r) = self.ankle(q, side);
-            let e = (r.inverse()).scaled_axis(); // to identity
+            let e = UnitQuaternion::from_rotation_matrix(&(r_target * r.inverse())).scaled_axis();
             let ep = target - p;
             nalgebra::SVector::<f64, 6>::from_column_slice(&[ep.x, ep.y, ep.z, e.x * 0.5, e.y * 0.5, e.z * 0.5])
         };
@@ -374,6 +380,8 @@ pub struct G1Frame {
     pub ground: Vec<[f64; 2]>,
     /// CoM
     pub com: [f64; 3],
+    /// pelvis yaw [rad]
+    pub yaw: f64,
     /// applied ZMP
     pub zmp: [f64; 2],
     /// DCM
@@ -453,7 +461,29 @@ pub fn run_with(strategy: Strategy, duration_s: f64, push: bool, backend: WbcBac
 /// [`run_with`] on a chosen [`G1Terrain`]: the contacts, the swing-foot heights and
 /// the CoM height target follow the ground.
 pub fn run_on(strategy: Strategy, duration_s: f64, push: bool, backend: WbcBackend, terrain: G1Terrain) -> G1Run {
+    simulate(strategy, duration_s, push, backend, terrain, ([0.0, 0.0], 0.0), None)
+}
+
+/// Steering callback: `(t, CoM xy) -> (step length [m], heading [rad])`.
+pub type Steer<'a> = &'a mut dyn FnMut(f64, [f64; 2]) -> (f64, f64);
+
+/// The G1 simulation: starts standing at `start = (xy, yaw)`; `steer`, when
+/// given, sets the walker's step length and heading every 10 ms (DCM strategy).
+pub fn simulate(
+    strategy: Strategy,
+    duration_s: f64,
+    push: bool,
+    backend: WbcBackend,
+    terrain: G1Terrain,
+    start: ([f64; 2], f64),
+    mut steer: Option<Steer>,
+) -> G1Run {
     let ground = move |x: f64, y: f64| terrain.height_m(x, y);
+    let rot2 = |v: [f64; 2], a: f64| -> [f64; 2] {
+        let (s, c) = a.sin_cos();
+        [c * v[0] - s * v[1], s * v[0] + c * v[1]]
+    };
+    let wrap = |a: f64| robo_control::robo_planning::geometry::normalize_angle(a);
     let g1 = G1::load();
     let model = &g1.model;
     let nv = model.nv();
@@ -462,6 +492,10 @@ pub fn run_on(strategy: Strategy, duration_s: f64, push: bool, backend: WbcBacke
     let mut q = g1.stand(0.72, ankle_y);
     let lowest = (0..2).map(|s| g1.ankle(&q, s).0.z).fold(f64::INFINITY, f64::min);
     q[2] += ANKLE_HEIGHT_M - lowest + 0.001;
+    let (start_xy, yaw0) = start;
+    q[0] += start_xy[0];
+    q[1] += start_xy[1];
+    q[5] = yaw0;
     let mut qd = vec![0.0; nv];
     let com0 = center_of_mass(model, &q).expect("com");
     let p = g1_params(com0.z, 2.0 * ankle_y);
@@ -469,13 +503,16 @@ pub fn run_on(strategy: Strategy, duration_s: f64, push: bool, backend: WbcBacke
     let w = p.omega();
     let walker_dt = 0.01;
     let walker_every = (walker_dt / dt) as usize;
-    let mut walker = LipmWalker::new(
+    let r0 = rot2([FOOT_CENTER_X_M, -ankle_y], yaw0);
+    let mut walker = LipmWalker::new_facing(
         p,
         strategy,
         walker_dt,
-        [FOOT_CENTER_X_M, -ankle_y],
+        [start_xy[0] + r0[0], start_xy[1] + r0[1]],
+        yaw0,
         (duration_s / p.step_s) as usize + 8,
     );
+    let mut pelvis_yaw = yaw0;
     let wbc = ForceQpWbc {
         mass_kg: g1.mass_kg,
         inertia_kgm2: [1.5, 1.4, 0.4],
@@ -514,13 +551,17 @@ pub fn run_on(strategy: Strategy, duration_s: f64, push: bool, backend: WbcBacke
         let cd: Vec<f64> = (0..3).map(|r| (0..nv).map(|c| jc.get(r, c) * qd[c]).sum()).collect();
         // ---- walker (robo-control) at 100 Hz
         if k % walker_every == 0 || last_out.is_none() {
+            if let Some(f) = steer.as_mut() {
+                let (l, h) = f(t, [com.x, com.y]);
+                walker.set_command(l, h);
+            }
             let o = walker.update(t, [com.x, com.y], [cd[0], cd[1]]);
             if o.step_index != last_step {
                 // tell the walker where the new stance foot really landed
                 last_step = o.step_index;
                 let (a, r) = g1.ankle(&q, if o.stance_left { 0 } else { 1 });
                 let c = a + r * Vector3::new(FOOT_CENTER_X_M, 0.0, 0.0);
-                walker.set_stance_position([c.x, c.y]);
+                walker.set_stance_pose([c.x, c.y], r.euler_angles().2);
                 last_out = Some(walker.update(t, [com.x, com.y], [cd[0], cd[1]]));
             } else {
                 last_out = Some(o);
@@ -536,7 +577,11 @@ pub fn run_on(strategy: Strategy, duration_s: f64, push: bool, backend: WbcBacke
         // rise with the treads smoothly (first order, 0.3 s), not in one jolt
         support_ground += (support_target - support_ground) * (dt / 0.3);
         let (lo, hi) = out.support;
-        let zmp = [out.zmp_des[0].clamp(lo[0], hi[0]), out.zmp_des[1].clamp(lo[1], hi[1])];
+        let zl = rot2(out.zmp_des, -out.support_yaw_rad);
+        let zmp = rot2(
+            [zl[0].clamp(lo[0], hi[0]), zl[1].clamp(lo[1], hi[1])],
+            out.support_yaw_rad,
+        );
         let acc = Vector3::new(
             w * w * (com.x - zmp[0]),
             w * w * (com.y - zmp[1]),
@@ -592,21 +637,31 @@ pub fn run_on(strategy: Strategy, duration_s: f64, push: bool, backend: WbcBacke
             let (l0, tg, u) = out.swing;
             let u = (u / 0.85).min(1.0);
             let sm = 0.5 - 0.5 * (std::f64::consts::PI * u).cos();
-            let x = l0[0] + (tg[0] - l0[0]) * sm - FOOT_CENTER_X_M;
-            let y = l0[1] + (tg[1] - l0[1]) * sm;
+            let (y0, y1) = out.swing_yaw_rad;
+            let yaw_s = y0 + wrap(y1 - y0) * sm;
+            let off = rot2([FOOT_CENTER_X_M, 0.0], yaw_s);
+            let x = l0[0] + (tg[0] - l0[0]) * sm - off[0];
+            let y = l0[1] + (tg[1] - l0[1]) * sm - off[1];
             // lift over the higher of the two treads, land on the target's
             let (g0, g1h) = (ground(l0[0], l0[1]), ground(tg[0], tg[1]));
             let z = ANKLE_HEIGHT_M + g0 + (g1h - g0) * sm - 0.004 * u
                 + (0.06 + (g1h - g0).abs()) * (std::f64::consts::PI * u).sin();
             q_ref[..6].copy_from_slice(&q[..6]);
-            g1.leg_ik(&mut q_ref, s, Vector3::new(x, y, z), 6);
+            g1.leg_ik_yaw(&mut q_ref, s, Vector3::new(x, y, z), yaw_s, 6);
             for &d in &g1.leg_dofs[s] {
                 desired[d] = q_ref[6 + d];
             }
         }
         // ---- whole-body control
+        // pelvis faces between the stance foot and the swing target, smoothed
+        let yaw_goal = if out.double_support {
+            out.support_yaw_rad
+        } else {
+            out.stance_yaw_rad + 0.5 * wrap(out.swing_yaw_rad.1 - out.stance_yaw_rad)
+        };
+        pelvis_yaw += wrap(yaw_goal - pelvis_yaw) * (dt / 0.25);
         let rot = G1::base_rotation(&q);
-        let e_body = rot.inverse() * rot.inverse().scaled_axis();
+        let e_body = rot.inverse() * (Rotation3::from_euler_angles(0.0, 0.0, pelvis_yaw) * rot.inverse()).scaled_axis();
         let alpha = e_body * 200.0 - Vector3::new(qd[3], qd[4], qd[5]) * 28.0;
         let mut tau = vec![0.0; nv];
         if fell.is_none() {
@@ -726,6 +781,7 @@ pub fn run_on(strategy: Strategy, duration_s: f64, push: bool, backend: WbcBacke
                     })
                     .collect(),
                 com: [com.x, com.y, com.z],
+                yaw: G1::base_rotation(&q).euler_angles().2,
                 zmp,
                 dcm: [com.x + cd[0] / w, com.y + cd[1] / w],
                 steps: walker.steps.clone(),

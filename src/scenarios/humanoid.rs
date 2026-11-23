@@ -189,13 +189,37 @@ impl Strategy {
     }
 }
 
+/// Rotates `v` by `a` [rad].
+fn rot2(v: [f64; 2], a: f64) -> [f64; 2] {
+    let (s, c) = a.sin_cos();
+    [c * v[0] - s * v[1], s * v[0] + c * v[1]]
+}
+
+/// Wraps an angle to (-pi, pi].
+fn wrap(a: f64) -> f64 {
+    let t = std::f64::consts::TAU;
+    let r = (a + std::f64::consts::PI).rem_euclid(t) - std::f64::consts::PI;
+    if r <= -std::f64::consts::PI {
+        r + t
+    } else {
+        r
+    }
+}
+
 /// One walker update.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WalkerOutput {
     /// desired ZMP before clamping to the support region
     pub zmp_des: [f64; 2],
-    /// support region (axis-aligned) lower and upper corners
+    /// support region lower and upper corners, in the frame rotated by
+    /// `support_yaw_rad` (axis-aligned when walking straight along +x)
     pub support: ([f64; 2], [f64; 2]),
+    /// yaw of the frame `support` is expressed in [rad]
+    pub support_yaw_rad: f64,
+    /// stance foot yaw [rad]
+    pub stance_yaw_rad: f64,
+    /// swing foot yaw at lift-off and at the target [rad]
+    pub swing_yaw_rad: (f64, f64),
     /// whether both feet are on the ground (initial double support)
     pub double_support: bool,
     /// stance foot centre (single support)
@@ -230,17 +254,42 @@ pub struct LipmWalker {
     /// preview reference state per axis: CoM, CoM velocity, CoM acceleration
     reference: Option<[[f64; 3]; 2]>,
     esum: [f64; 2],
+    yaw0: f64,
+    stance_yaw: f64,
+    next_yaw: f64,
+    liftoff_yaw: f64,
+    /// commanded walking heading [rad] (DCM strategy)
+    pub heading_rad: f64,
+    /// largest heading change per step [rad]
+    pub max_turn_per_step_rad: f64,
 }
 
 impl LipmWalker {
     /// Walker standing with its right foot at `right0` (first stance foot) and
     /// its left foot `step_width_m` to the left, CoM between them.
     pub fn new(p: LipmParams, strategy: Strategy, dt_s: f64, right0: [f64; 2], n_steps: usize) -> Self {
+        Self::new_facing(p, strategy, dt_s, right0, 0.0, n_steps)
+    }
+
+    /// [`Self::new`] facing `yaw_rad`: the left foot is `step_width_m` to the
+    /// robot's left and the nominal steps run along `yaw_rad`.
+    pub fn new_facing(
+        p: LipmParams,
+        strategy: Strategy,
+        dt_s: f64,
+        right0: [f64; 2],
+        yaw_rad: f64,
+        n_steps: usize,
+    ) -> Self {
         let plan: Vec<[f64; 2]> = nominal_steps(&p, n_steps)
             .into_iter()
-            .map(|s| [s[0] + right0[0], s[1] + right0[1] + p.step_width_m / 2.0])
+            .map(|s| {
+                let d = rot2([s[0], s[1] + p.step_width_m / 2.0], yaw_rad);
+                [right0[0] + d[0], right0[1] + d[1]]
+            })
             .collect();
-        let left0 = [right0[0], right0[1] + p.step_width_m];
+        let l = rot2([0.0, p.step_width_m], yaw_rad);
+        let left0 = [right0[0] + l[0], right0[1] + l[1]];
         Self {
             p,
             strategy,
@@ -255,7 +304,21 @@ impl LipmWalker {
             reference: None,
             esum: [0.0, 0.0],
             plan,
+            yaw0: yaw_rad,
+            stance_yaw: yaw_rad,
+            next_yaw: yaw_rad,
+            liftoff_yaw: yaw_rad,
+            heading_rad: yaw_rad,
+            max_turn_per_step_rad: 0.2,
         }
+    }
+
+    /// Sets the step length and walking heading for the coming steps (DCM
+    /// strategy; the preview strategy keeps its fixed plan). The heading turns
+    /// by at most `max_turn_per_step_rad` per step.
+    pub fn set_command(&mut self, step_length_m: f64, heading_rad: f64) {
+        self.p.step_length_m = step_length_m;
+        self.heading_rad = heading_rad;
     }
 
     fn zref(&self, t: f64) -> [f64; 2] {
@@ -284,6 +347,12 @@ impl LipmWalker {
         }
     }
 
+    /// [`Self::set_stance_position`] plus the stance foot's actual yaw.
+    pub fn set_stance_pose(&mut self, centre: [f64; 2], yaw_rad: f64) {
+        self.set_stance_position(centre);
+        self.stance_yaw = yaw_rad;
+    }
+
     /// Advances to time `t` with the measured CoM position and velocity.
     pub fn update(&mut self, t: f64, c: [f64; 2], cd: [f64; 2]) -> WalkerOutput {
         let p = self.p;
@@ -302,11 +371,17 @@ impl LipmWalker {
         if s_idx != self.step_idx {
             self.step_idx = s_idx;
             self.liftoff = self.stance;
+            self.liftoff_yaw = self.stance_yaw;
             self.stance = self.next;
+            self.stance_yaw = self.next_yaw;
             self.steps.push(self.stance);
             self.next = if dcm_stepping {
+                let turn = wrap(self.heading_rad - self.stance_yaw)
+                    .clamp(-self.max_turn_per_step_rad, self.max_turn_per_step_rad);
+                self.next_yaw = self.stance_yaw + turn;
                 let side = right_y_sign(s_idx + 1);
-                [self.stance[0] + p.step_length_m, self.stance[1] + side * p.step_width_m]
+                let d = rot2([p.step_length_m, side * p.step_width_m], self.stance_yaw + 0.5 * turn);
+                [self.stance[0] + d[0], self.stance[1] + d[1]]
             } else {
                 self.plan[(s_idx + 1).min(self.plan.len() - 1)]
             };
@@ -318,51 +393,60 @@ impl LipmWalker {
         };
         let dcm = [c[0] + cd[0] / w, c[1] + cd[1] / w];
         let stance = self.stance;
+        // support rectangle(s) in the frame of the stance foot (or the start pose)
+        let support_yaw = if walking { self.stance_yaw } else { self.yaw0 };
         let support = if walking {
+            let c = rot2(stance, -support_yaw);
             (
-                [stance[0] - p.foot_size_m.0 / 2.0, stance[1] - p.foot_size_m.1 / 2.0],
-                [stance[0] + p.foot_size_m.0 / 2.0, stance[1] + p.foot_size_m.1 / 2.0],
+                [c[0] - p.foot_size_m.0 / 2.0, c[1] - p.foot_size_m.1 / 2.0],
+                [c[0] + p.foot_size_m.0 / 2.0, c[1] + p.foot_size_m.1 / 2.0],
             )
         } else {
+            let (a, b) = (rot2(self.plan[0], -support_yaw), rot2(self.left0, -support_yaw));
             (
                 [
-                    self.plan[0][0].min(self.left0[0]) - p.foot_size_m.0 / 2.0,
-                    self.plan[0][1].min(self.left0[1]) - p.foot_size_m.1 / 2.0,
+                    a[0].min(b[0]) - p.foot_size_m.0 / 2.0,
+                    a[1].min(b[1]) - p.foot_size_m.1 / 2.0,
                 ],
                 [
-                    self.plan[0][0].max(self.left0[0]) + p.foot_size_m.0 / 2.0,
-                    self.plan[0][1].max(self.left0[1]) + p.foot_size_m.1 / 2.0,
+                    a[0].max(b[0]) + p.foot_size_m.0 / 2.0,
+                    a[1].max(b[1]) + p.foot_size_m.1 / 2.0,
                 ],
             )
         };
         let zmp_des = if dcm_stepping {
             if walking {
+                // everything in the walking frame: between the stance foot's yaw
+                // and the next foot's
+                let psi = self.stance_yaw + 0.5 * wrap(self.next_yaw - self.stance_yaw);
+                let d = rot2([dcm[0] - stance[0], dcm[1] - stance[1]], -psi);
                 let side = right_y_sign(s_idx + 1);
                 let b = [p.step_length_m / (ewt - 1.0), -side * p.step_width_m / (ewt + 1.0)];
                 let er = (w * (p.step_s - tau)).exp();
-                let xi_td = [
-                    stance[0] + (dcm[0] - stance[0]) * er,
-                    stance[1] + (dcm[1] - stance[1]) * er,
-                ];
-                let dx = (xi_td[0] - b[0] - stance[0]).clamp(-p.max_reach_m, p.max_reach_m);
-                let dy = xi_td[1] - b[1] - stance[1];
+                let xi_td = [d[0] * er, d[1] * er];
+                let dx = (xi_td[0] - b[0]).clamp(-p.max_reach_m, p.max_reach_m);
+                let dy = xi_td[1] - b[1];
                 let dy = if side > 0.0 {
                     dy.clamp(0.12, p.max_reach_m)
                 } else {
                     dy.clamp(-p.max_reach_m, -0.12)
                 };
                 if tau < p.step_s - 0.05 {
-                    self.next = [stance[0] + dx, stance[1] + dy];
+                    let o = rot2([dx, dy], psi);
+                    self.next = [stance[0] + o[0], stance[1] + o[1]];
                 }
                 // DCM error feedback inside the foot: p = f + (1 + k)(xi - xi_nominal)
                 let b_cur = [p.step_length_m / (ewt - 1.0), side * p.step_width_m / (ewt + 1.0)];
                 let grow = (w * tau).exp();
-                let xi_nom = [stance[0] + b_cur[0] * grow, stance[1] + b_cur[1] * grow];
                 let k_fb = 1.0;
-                [
-                    stance[0] + (1.0 + k_fb) * (dcm[0] - xi_nom[0]),
-                    stance[1] + (1.0 + k_fb) * (dcm[1] - xi_nom[1]),
-                ]
+                let z = rot2(
+                    [
+                        (1.0 + k_fb) * (d[0] - b_cur[0] * grow),
+                        (1.0 + k_fb) * (d[1] - b_cur[1] * grow),
+                    ],
+                    psi,
+                );
+                [stance[0] + z[0], stance[1] + z[1]]
             } else {
                 // drive the DCM to its steady-walking value at the first step
                 let b0 = [p.step_length_m / (ewt - 1.0), p.step_width_m / (ewt + 1.0)];
@@ -372,6 +456,7 @@ impl LipmWalker {
                     (self.plan[0][0] + self.left0[0]) / 2.0,
                     (self.plan[0][1] + self.left0[1]) / 2.0,
                 ];
+                let b0 = rot2(b0, self.yaw0);
                 let tgt0 = [self.plan[0][0] + b0[0], self.plan[0][1] + b0[1]];
                 let tgt = [mid[0] + (tgt0[0] - mid[0]) * u, mid[1] + (tgt0[1] - mid[1]) * u];
                 [dcm[0] + 1.5 * (dcm[0] - tgt[0]), dcm[1] + 1.5 * (dcm[1] - tgt[1])]
@@ -405,6 +490,9 @@ impl LipmWalker {
         WalkerOutput {
             zmp_des,
             support,
+            support_yaw_rad: support_yaw,
+            stance_yaw_rad: self.stance_yaw,
+            swing_yaw_rad: (if walking { self.liftoff_yaw } else { self.yaw0 }, self.next_yaw),
             double_support: !walking,
             stance,
             stance_left: s_idx % 2 == 1,

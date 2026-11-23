@@ -3,7 +3,7 @@
 //!
 //! ```bash
 //! cargo run --release -p robo-control-rne --example rne_gallery        # out/rne/{go2,g1}.gif + README.md
-//! cargo run --release -p robo-control-rne --example rne_gallery g1     # one of: go2 g1 go2_terrain go2_stairs g1_ramp fleet go2_mission go2_crowd
+//! cargo run --release -p robo-control-rne --example rne_gallery g1     # one of: go2 g1 go2_terrain go2_stairs g1_ramp fleet go2_mission go2_crowd g1_mission
 //! ```
 
 use robo_control::legged3d::{ConvexMpc3d, ForceController, PdForceQp};
@@ -431,6 +431,63 @@ fn crowd_gif(runs: &[crowd::CrowdRun]) -> std::io::Result<()> {
     Ok(())
 }
 
+fn g1_mission_gif(r: &mission::G1MissionRun) -> std::io::Result<()> {
+    let (w, h) = (900u32, 600u32);
+    let mut gif = GifWriter::create(format!("{OUT}/g1_mission.gif"), w, h)?;
+    let v = View::fit(r.map.min, r.map.max, 10.0, 40.0, 880.0, 520.0);
+    let reference: Vec<Vec2> = r.reference.iter().map(|p| Vec2::new(p.p.x, p.p.y)).collect();
+    let m = |key: &str| r.metrics.iter().find(|(k2, _)| k2 == key).map_or(f64::NAN, |(_, v)| *v);
+    let (right, left) = (colors::series(0), colors::series(1));
+    for fi in (0..r.frames.len()).step_by(10) {
+        let f = &r.frames[fi];
+        let mut c = Canvas::new(w, h);
+        title(
+            &mut c,
+            "RNE G1 WAREHOUSE MISSION: A* PLAN, DCM WALKER TURNING STEP BY STEP",
+        );
+        c.map(&v, &r.map);
+        c.polyline(&v, &reference, colors::INK.alpha(70), 2.0);
+        // footsteps: the start pair (right, left), then each new stance foot,
+        // starting with the left
+        for (i, st) in f.steps.iter().enumerate() {
+            let is_right = i == 0 || (i >= 2 && i % 2 == 1);
+            let col = if is_right { right } else { left };
+            c.dot(&v, Vec2::new(st[0], st[1]), 2.5, col.alpha(170));
+        }
+        let tr: Vec<Vec2> = r.frames[..=fi].iter().map(|g| Vec2::new(g.com[0], g.com[1])).collect();
+        c.polyline(&v, &tr, colors::INK, 1.5);
+        let pose = Pose2::new(f.com[0], f.com[1], f.yaw);
+        let (bx, by) = v.px(pose.pos());
+        c.ring_px(
+            bx,
+            by,
+            mission::G1_RADIUS_M as f32 * v.scale(),
+            colors::INK.alpha(120),
+            1.0,
+        );
+        c.oriented_box(&v, pose, 0.2, 0.42, colors::INK);
+        c.arrow(&v, pose, 0.45, colors::ORANGE, 2.5);
+        c.label(
+            14.0,
+            568.0,
+            &format!(
+                "T {:.0} S   STEPS {}   RMS CTE {:.3} M   MIN CLEAR {:.2} M   ARRIVED {:.0} S",
+                f.t,
+                f.steps.len(),
+                m("rms_cte_m"),
+                m("min_clearance_m"),
+                m("arrival_s")
+            ),
+            1.4,
+            colors::INK,
+        );
+        c.label(700.0, 568.0, "RIGHT", 1.4, right);
+        c.label(760.0, 568.0, "LEFT FOOT", 1.4, left);
+        gif.frame(&c, 6)?;
+    }
+    Ok(())
+}
+
 fn main() -> std::io::Result<()> {
     let only: Vec<String> = std::env::args().skip(1).collect();
     let on = |n: &str| only.is_empty() || only.iter().any(|o| o == n);
@@ -547,6 +604,15 @@ fn main() -> std::io::Result<()> {
         mission_gif(&runs)?;
         let rows: Vec<_> = runs.iter().map(|r| (r.name.clone(), r.metrics.clone())).collect();
         let _ = writeln!(md, "## go2 warehouse mission\n\n{}", table(&rows));
+    }
+    if on("g1_mission") {
+        let r = mission::warehouse_g1();
+        g1_mission_gif(&r)?;
+        let _ = writeln!(
+            md,
+            "## g1 warehouse mission\n\n{}",
+            table(&[("DCM + step adjustment".to_string(), r.metrics.clone())])
+        );
     }
     if on("go2_crowd") {
         let p = go2::go2_srb(&rne_locomotion::Quadruped::go2().expect("Go2"));

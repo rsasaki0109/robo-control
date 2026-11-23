@@ -151,3 +151,35 @@ fn go2_dodges_the_warehouse_crowd_with_mppi() {
     assert_eq!(hits, 0.0, "MPPI touched a mover (gap {gap})");
     assert!(gap > 0.1 && arrival < 95.0, "gap {gap}, arrival {arrival}");
 }
+
+#[test]
+fn g1_turns_by_footsteps_left_right_and_around() {
+    use robo_control_rne::g1::{simulate, G1Terrain, WbcBackend};
+    for (turn, len) in [(1.57, 0.12), (-1.57, 0.12), (3.0, 0.08)] {
+        let mut steer = |t: f64, _c: [f64; 2]| (len, if t > 3.0 { turn } else { 0.0 });
+        let r = simulate(
+            Strategy::DcmStepAdjustment,
+            12.0,
+            false,
+            WbcBackend::Rne,
+            G1Terrain::Flat,
+            ([0.0, 0.0], 0.0),
+            Some(&mut steer),
+        );
+        assert!(r.fell_at_s.is_none(), "turn {turn}: fell at {:?}", r.fell_at_s);
+        let yaw = r.frames.last().unwrap().yaw;
+        let err = robo_control::robo_planning::geometry::normalize_angle(yaw - turn);
+        assert!(err.abs() < 0.15, "turn {turn}: ended facing {yaw}");
+    }
+}
+
+#[test]
+fn g1_walks_the_warehouse_mission() {
+    let r = mission::warehouse_g1();
+    let m = |k: &str| r.metrics.iter().find(|(n, _)| n == k).unwrap().1;
+    assert_eq!(m("fell"), 0.0, "{:?}", r.metrics);
+    assert!(m("rms_cte_m") < 0.12, "{:?}", r.metrics);
+    assert!(m("min_clearance_m") > 0.0, "{:?}", r.metrics);
+    assert!(m("arrival_s") < m("plan_duration_s") + 5.0, "{:?}", r.metrics);
+    assert!(m("goal_err_m") < 0.3, "{:?}", r.metrics);
+}
