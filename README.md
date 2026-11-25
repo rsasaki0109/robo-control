@@ -74,7 +74,7 @@ the plant, robo-control decides.
 | Go2 among people and a cart |
 |:---:|
 | ![go2 crowd](docs/media/rne_go2_crowd.gif) |
-| The same warehouse route, now with two people and a cart (purple) crossing it on fixed back-and-forth routes. Blue follows the plan blindly and walks into all three. Orange and green track the global path with a local planner and step around them: orange is robot-planning's DWA (`dwa::plan_with_movers`, constant `(v, w)` arcs checked against the movers' constant-velocity predictions), green robot-control's MPPI (sampled input sequences on a unicycle model, same predictions, a 10 cm safety margin). Over eight cart timings MPPI never touches a mover; DWA freezes once when cornered by the cart and is walked into. The movers are kinematic, so contact is measured rather than simulated; the Go2 walks with convex MPC on RNE throughout. |
+| Four Go2 runs overlay the same warehouse route with two people and a cart (purple) on fixed back-and-forth routes. Blue follows the timed plan, orange uses robot-planning's DWA, green uses MPPI with a unicycle model, and red uses MPPI with independent forward and lateral body velocities. DWA tests constant-velocity arcs. Both MPPI variants sample input sequences with a 10 cm safety margin, and the holonomic variant adds a small cost for lateral commands. All three local planners predict the movers at constant velocity. The movers are kinematic discs, and contact is measured by distance. The Go2 walks with convex MPC on RNE throughout. |
 
 | Four Go2s swapping corners |
 |:---:|
@@ -139,21 +139,27 @@ cargo test --release -p robo-control-rne                          # asserts the 
 
 #### Go2 among people and a cart (convex MPC walking)
 
-At the default cart timing:
+At the default cart phase of 6.0 s:
 
 | method | fell | contacts | contact_s | min_gap_m | min_shelf_clearance_m | arrival_s |
 |---|---|---|---|---|---|---|
 | no avoidance | 0.000 | 3.000 | 4.612 | -0.650 | 0.076 | 62.556 |
 | DWA | 0.000 | 0.000 | 0.000 | 0.039 | 0.035 | 98.978 |
 | MPPI | 0.000 | 0.000 | 0.000 | 0.173 | 0.188 | 91.994 |
+| MPPI (holonomic) | 0.000 | 0.000 | 0.000 | 0.288 | 0.197 | 80.010 |
 
-Over eight cart timings (0 to 9.8 s, run in parallel):
+In the lower passage, the holonomic run shifted sideways while moving forward and kept 0.288 m from the oncoming person, compared with 0.173 m for unicycle MPPI. It still slowed and briefly backed up at the open-bay crossing before walking past the second person.
+
+Over all eight cart phases (0.0, 1.4, 2.8, 4.2, 5.6, 7.0, 8.4 and 9.8 s):
 
 | method | runs | runs_with_contact | contacts | worst_min_gap_m | arrived | mean_arrival_s | falls |
 |---|---|---|---|---|---|---|---|
 | no avoidance | 8 | 8 | 19 | -0.651 | 8 | 62.6 | 0 |
 | DWA | 8 | 1 | 1 | -0.468 | 8 | 82.4 | 0 |
 | MPPI | 8 | 0 | 0 | 0.173 | 8 | 83.4 | 0 |
+| MPPI (holonomic) | 8 | 0 | 0 | 0.288 | 8 | 81.9 | 0 |
+
+Both MPPI variants completed all eight runs without contact. The holonomic variant averaged 81.9 s versus 83.4 s for unicycle MPPI. At the 8.4 s cart phase it took 82.744 s versus 82.428 s for unicycle MPPI.
 
 #### Four Go2s swapping corners
 
@@ -177,7 +183,7 @@ What carried over and what did not:
 - **Stairs**: the Go2 climbs five 8 cm steps (0.4 m) with either force controller for any swing apex from 10 to 14 cm, and the MPC tracks speed far better on the way (0.09 vs 0.20 m/s RMS). 10 cm steps are marginal: both climb with a 10 cm apex, but the MPC falls with 12-14 cm; 12 cm steps defeat both. Its point feet need no foothold selection, which is exactly what the G1 lacks (below).
 - **Terrain**: both Go2 controllers trot over +-10 cm terraced terrain (the MPC with half the tilt); the G1 with DCM stepping climbs a 5 % ramp through the push while fixed footsteps fall. Stairs are not there yet, for a geometric reason. With edges midway between footholds the sole clears an edge by step/2 - 0.085 m: 1.5 cm at 0.2 m steps, while the swing feet land within about 3 cm. A safe margin needs steps of 0.25 m or more, which this G1 controller does not walk stably even on the flat. Tread-centred footholds (with hysteresis), riser contacts with a horizontal normal and a task-space swing-foot task were all tried; none made the climb robust, so none is shipped.
 - **Fleet**: both methods bring the four Go2s home without overlap. Reciprocal avoidance squeezes past at 6 cm and finishes first (17.0 s); prioritized planning keeps its reserved 0.9 m separation (0.2 m of air) and takes 18.3 s. On a 0.5 m grid it first planned overlapping robots, which is why `prioritized_plan` now takes a separation larger than one cell.
-- **Warehouse**: planning and control end to end. The Go2 follows the route with either force controller, and the convex MPC holds tighter in the turns (5 vs 16 cm). The G1 needed the walker to turn by footsteps, and the swing sole, ZMP support and pelvis to follow the feet's yaw; with that it walks the whole route (366 steps). Among moving people and a cart, MPPI with constant-velocity predictions never touched a mover over eight cart timings; DWA with the same predictions froze once when cornered and was walked into.
+- **Warehouse**: planning and control end to end. The Go2 follows the route with either force controller, and the convex MPC holds tighter in the turns (5 vs 16 cm). The G1 needed the walker to turn by footsteps, and the swing sole, ZMP support and pelvis to follow the feet's yaw; with that it walks the whole route (366 steps). Among moving people and a cart, both MPPI variants completed all eight cart timings without contact. The holonomic variant kept a larger minimum gap. DWA froze once when cornered and was walked into.
 - Three things were needed beyond the point-mass walker: telling the walker
   where each foot actually landed (`LipmWalker::set_stance_position`),
   switching support on measured contact rather than on the clock, and a

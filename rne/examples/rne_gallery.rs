@@ -383,14 +383,14 @@ fn crowd_gif(runs: &[crowd::CrowdRun]) -> std::io::Result<()> {
     for fi in (0..nf).step_by(5) {
         let t = runs[0].frames[fi].t;
         let mut c = Canvas::new(w, h);
-        title(&mut c, "RNE GO2 AMONG PEOPLE AND A CART: NO AVOIDANCE / DWA / MPPI");
+        title(&mut c, "RNE GO2 AMONG PEOPLE AND A CART");
         c.map(&v, map);
         c.polyline(&v, &reference, colors::INK.alpha(60), 2.0);
         for m in &runs[0].movers {
             c.segments(&v, &[(m.a, m.b)], mover_col.alpha(60), 1.0);
             c.disc(&v, m.pos(t), m.radius_m, mover_col.alpha(200));
         }
-        c.label(14.0, 568.0, &format!("T {t:.1} S"), 1.4, colors::INK);
+        c.label(14.0, 562.0, &format!("T {t:.1} S"), 1.4, colors::INK);
         for (k, r) in runs.iter().enumerate() {
             let col = colors::series(k);
             let f = &r.frames[fi];
@@ -424,7 +424,13 @@ fn crowd_gif(runs: &[crowd::CrowdRun]) -> std::io::Result<()> {
                 m("contacts"),
                 m("min_gap_m")
             );
-            c.label(100.0 + k as f32 * 270.0, 568.0, &txt, 1.4, col);
+            c.label(
+                100.0 + (k % 2) as f32 * 390.0,
+                562.0 + (k / 2) as f32 * 18.0,
+                &txt,
+                1.4,
+                col,
+            );
         }
         gif.frame(&c, 5)?;
     }
@@ -616,7 +622,12 @@ fn main() -> std::io::Result<()> {
     }
     if on("go2_crowd") {
         let p = go2::go2_srb(&rne_locomotion::Quadruped::go2().expect("Go2"));
-        let methods = [crowd::Avoidance::None, crowd::Avoidance::Dwa, crowd::Avoidance::Mppi];
+        let methods = [
+            crowd::Avoidance::None,
+            crowd::Avoidance::Dwa,
+            crowd::Avoidance::Mppi,
+            crowd::Avoidance::MppiHolonomic,
+        ];
         let runs: Vec<_> = methods
             .iter()
             .map(|m| crowd::warehouse_crowd(&mut ConvexMpc3d::new(p), *m))

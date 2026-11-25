@@ -150,6 +150,13 @@ fn go2_dodges_the_warehouse_crowd_with_mppi() {
     let (hits, gap, arrival) = run(Avoidance::Mppi);
     assert_eq!(hits, 0.0, "MPPI touched a mover (gap {gap})");
     assert!(gap > 0.1 && arrival < 95.0, "gap {gap}, arrival {arrival}");
+    let (hits, gap, holonomic_arrival) = run(Avoidance::MppiHolonomic);
+    assert_eq!(hits, 0.0, "Holonomic MPPI touched a mover (gap {gap})");
+    assert!(gap > 0.1, "Holonomic MPPI gap {gap}");
+    assert!(
+        holonomic_arrival < arrival,
+        "Holonomic MPPI arrived at {holonomic_arrival} s, MPPI at {arrival} s"
+    );
 }
 
 #[test]

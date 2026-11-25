@@ -2,7 +2,7 @@
 //! (convex MPC walking on RNE) follows robot-planning's global route and a
 //! local planner dodges the movers. Compared: no avoidance (the planned
 //! timing only), DWA from robot-planning and
-//! MPPI from robot-control (predicts them at constant velocity).
+//! MPPI from robot-control with either unicycle or holonomic dynamics.
 //!
 //! The movers are kinematic discs on fixed back-and-forth routes, so every
 //! method meets the same crowd; contact with them is measured, not simulated.
@@ -13,7 +13,7 @@ use nalgebra::DVector;
 use rne_math::Vec3;
 use robo_control::legged3d::ForceController;
 use robo_control::metrics::distance_to_polyline;
-use robo_control::models::Unicycle;
+use robo_control::models::{Holonomic, Unicycle};
 use robo_control::mppi::Mppi;
 use robo_control::robo_planning::dwa::{self, DwaConfig, MovingDisc};
 use robo_control::robo_planning::geometry::normalize_angle;
@@ -92,6 +92,8 @@ pub enum Avoidance {
     Dwa,
     /// robot-control's MPPI with constant-velocity predictions of the movers
     Mppi,
+    /// MPPI with forward and lateral body velocity commands
+    MppiHolonomic,
 }
 
 impl Avoidance {
@@ -101,6 +103,7 @@ impl Avoidance {
             Avoidance::None => "no avoidance",
             Avoidance::Dwa => "DWA",
             Avoidance::Mppi => "MPPI",
+            Avoidance::MppiHolonomic => "MPPI (holonomic)",
         }
     }
 }
@@ -175,6 +178,12 @@ pub fn warehouse_crowd_with(controller: &mut dyn ForceController, method: Avoida
     };
     let mut mppi = Mppi::new(2, 30, 0.1, 384, 0.3, DVector::from_vec(vec![0.3, 0.8]), 7);
     mppi.set_nominal(vec![DVector::from_vec(vec![0.5, 0.0]); 30]);
+    let holonomic = Holonomic {
+        forward_max_mps: V_MAX,
+        ..Holonomic::default()
+    };
+    let mut lateral_mppi = Mppi::new(3, 30, 0.1, 384, 0.3, DVector::from_vec(vec![0.3, 0.16, 0.8]), 7);
+    lateral_mppi.set_nominal(vec![DVector::from_vec(vec![0.5, 0.0, 0.0]); 30]);
     let dwa_cfg = DwaConfig {
         v_max_mps: V_MAX,
         w_max_radps: 1.2,
@@ -186,6 +195,7 @@ pub fn warehouse_crowd_with(controller: &mut dyn ForceController, method: Avoida
         ..DwaConfig::default()
     };
     let (mut s_idx, mut vw, mut heading) = (0usize, (0.0f64, 0.0f64), start.yaw_rad);
+    let mut lateral = 0.0;
     let mut cmd = ([0.0, 0.0], start.yaw_rad, 0.0);
     let mut local = Vec::new();
     let (mut frames, mut min_gap, mut clear) = (Vec::new(), f64::INFINITY, f64::INFINITY);
@@ -225,7 +235,7 @@ pub fn warehouse_crowd_with(controller: &mut dyn ForceController, method: Avoida
                 // carrot on the global path ahead of the robot
                 let carrot = path[(s_idx + 30).min(path.len() - 1)];
                 let pose = Pose2::new(pos.x, pos.y, yaw);
-                (vw, local) = match method {
+                (vw, lateral, local) = match method {
                     Avoidance::Dwa => {
                         let discs: Vec<MovingDisc> = movers
                             .iter()
@@ -236,12 +246,11 @@ pub fn warehouse_crowd_with(controller: &mut dyn ForceController, method: Avoida
                             })
                             .collect();
                         match dwa::plan_with_movers(&map, &discs, pose, vw.0, vw.1, carrot, &dwa_cfg) {
-                            Some(c) => ((c.v_mps, c.w_radps), c.rollout.iter().map(|p| p.pos()).collect()),
-                            None => ((0.0, 0.0), Vec::new()),
+                            Some(c) => ((c.v_mps, c.w_radps), 0.0, c.rollout.iter().map(|p| p.pos()).collect()),
+                            None => ((0.0, 0.0), 0.0, Vec::new()),
                         }
                     }
-                    _ => {
-                        let x0 = DVector::from_vec(vec![pos.x, pos.y, yaw, vw.0, vw.1]);
+                    Avoidance::Mppi | Avoidance::MppiHolonomic => {
                         let window: Vec<Vec2> = path[s_idx.saturating_sub(5)..(s_idx + 90).min(path.len())].to_vec();
                         let target = path[(s_idx + 42).min(path.len() - 1)];
                         let pred: Vec<Vec<(Vec2, f64)>> = (0..=30)
@@ -268,23 +277,47 @@ pub fn warehouse_crowd_with(controller: &mut dyn ForceController, method: Avoida
                             }
                             c
                         };
-                        let u = mppi.control(
-                            &uni,
-                            &x0,
-                            |j, x, u| {
-                                cost(Vec2::new(x[0], x[1]), j) + 0.3 * (V_MAX - u[0]).powi(2) + 0.05 * u[1] * u[1]
-                            },
-                            |x| 6.0 * Vec2::new(x[0], x[1]).dist(target) + cost(Vec2::new(x[0], x[1]), 30),
-                        );
-                        let pts = mppi.predicted.iter().map(|x| Vec2::new(x[0], x[1])).collect();
-                        ((u[0].max(-0.3), u[1]), pts)
+                        let terminal = |x: &DVector<f64>| {
+                            let p = Vec2::new(x[0], x[1]);
+                            6.0 * p.dist(target) + cost(p, 30)
+                        };
+                        if method == Avoidance::MppiHolonomic {
+                            let x0 = DVector::from_vec(vec![pos.x, pos.y, yaw, vw.0, lateral, vw.1]);
+                            let u = lateral_mppi.control(
+                                &holonomic,
+                                &x0,
+                                |j, x, u| {
+                                    cost(Vec2::new(x[0], x[1]), j)
+                                        + 0.3 * (V_MAX - u[0]).powi(2)
+                                        + 0.05 * u[2] * u[2]
+                                        + 0.5 * u[1] * u[1]
+                                },
+                                terminal,
+                            );
+                            let pts = lateral_mppi.predicted.iter().map(|x| Vec2::new(x[0], x[1])).collect();
+                            ((u[0], u[2]), u[1], pts)
+                        } else {
+                            let x0 = DVector::from_vec(vec![pos.x, pos.y, yaw, vw.0, vw.1]);
+                            let u = mppi.control(
+                                &uni,
+                                &x0,
+                                |j, x, u| {
+                                    cost(Vec2::new(x[0], x[1]), j) + 0.3 * (V_MAX - u[0]).powi(2) + 0.05 * u[1] * u[1]
+                                },
+                                terminal,
+                            );
+                            let pts = mppi.predicted.iter().map(|x| Vec2::new(x[0], x[1])).collect();
+                            ((u[0].max(-0.3), u[1]), 0.0, pts)
+                        }
                     }
+                    Avoidance::None => unreachable!("plain tracking is handled above"),
                 };
                 // integrate the commanded heading, kept close to the measured one
                 heading = normalize_angle(heading + vw.1 * 0.1);
                 let lead = normalize_angle(heading - yaw).clamp(-0.35, 0.35);
                 heading = normalize_angle(yaw + lead);
-                cmd = ([vw.0 * yaw.cos(), vw.0 * yaw.sin()], heading, vw.1);
+                let (sin, cos) = (yaw.sin(), yaw.cos());
+                cmd = ([vw.0 * cos - lateral * sin, vw.0 * sin + lateral * cos], heading, vw.1);
             }
         }
         if arrived.is_some() && k % 50 == 0 {
@@ -294,6 +327,17 @@ pub fn warehouse_crowd_with(controller: &mut dyn ForceController, method: Avoida
                 v = v * (0.3 / v.norm());
             }
             cmd = ([v.x, v.y], heading, 0.0);
+        }
+        if method == Avoidance::MppiHolonomic && k % 50 == 0 && (arrived.is_some() || pos.dist(goal) < 0.5) {
+            // Apply the body-frame speed limits to the position controller at the goal, too.
+            let (sin, cos) = (yaw.sin(), yaw.cos());
+            let vx = cmd.0[0] * cos + cmd.0[1] * sin;
+            let vy = -cmd.0[0] * sin + cmd.0[1] * cos;
+            let vx_bounded = vx.clamp(-holonomic.reverse_max_mps, holonomic.forward_max_mps);
+            let vy_bounded = vy.clamp(-holonomic.lateral_max_mps, holonomic.lateral_max_mps);
+            if vx != vx_bounded || vy != vy_bounded {
+                cmd.0 = [vx_bounded * cos - vy_bounded * sin, vx_bounded * sin + vy_bounded * cos];
+            }
         }
         g.step_heading(cmd.0, cmd.1, cmd.2, Vec3::ZERO);
         if t >= T_WALK {
