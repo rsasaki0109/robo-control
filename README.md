@@ -8,7 +8,7 @@ cart-pole. Reference paths come from
 機体（車輪型・犬型・ヒューマノイド・アーム・ドローン・倒立振子）ごとに、
 合う制御則を同じタスクで比較シミュレーションするライブラリです。
 
-![Go2 and G1 simulations on Robot Native Engine](docs/media/hero.gif)
+![3D replay of Go2 walking past a person with holonomic MPPI on Robot Native Engine](docs/media/hero.gif)
 
 ## Gallery by robot body
 
@@ -309,11 +309,15 @@ cargo test --release -p robo-control-rne   # Go2 / G1 on RNE (first build fetche
 Everything is deterministic: fixed-step RK4 / semi-implicit Euler, no wall clock,
 seeded noise.
 
-The hero GIF at the top tiles the gallery GIFs in `docs/media/` (needs Pillow; see the
-script's docstring for the arguments):
+The hero GIF replays a clip from the holonomic MPPI warehouse run in Blender,
+using Go2 link poses recorded from RNE and the Go2 meshes shipped with RNE.
+The warehouse props visualize the scenario's shelves and moving discs.
+
+To tile gallery GIFs into a separate overview, use the Pillow-based script:
 
 ```bash
-python3 scripts/hero_gif.py docs/media/hero.gif "TITLE" docs/media/a.gif:"Caption" ...
+mkdir -p out
+python3 scripts/hero_gif.py out/gallery.gif "TITLE" docs/media/a.gif:"Caption" ...
 ```
 
 ## License
