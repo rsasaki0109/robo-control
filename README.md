@@ -10,6 +10,10 @@ cart-pole. Reference paths come from
 
 ![3D replay of Go2 walking past a person with holonomic MPPI on Robot Native Engine](docs/media/hero.gif)
 
+| Go2 climbing five steps | Go2 crossing terraced ground |
+|:---:|:---:|
+| ![3D replay of Go2 climbing five steps on RNE](docs/media/hero_go2_stairs.gif) | ![3D replay of Go2 crossing terraced terrain on RNE](docs/media/hero_go2_terrain.gif) |
+
 ## Gallery by robot body
 
 ### Wheeled
@@ -299,9 +303,10 @@ cargo test --release -p robo-control-rne   # Go2 / G1 on RNE (first build fetche
 Everything is deterministic: fixed-step RK4 / semi-implicit Euler, no wall clock,
 seeded noise.
 
-The hero GIF replays a clip from the holonomic MPPI warehouse run in Blender,
-using Go2 link poses recorded from RNE and the Go2 meshes shipped with RNE.
-The warehouse props visualize the scenario's shelves and moving discs.
+The 3D GIFs replay the holonomic MPPI warehouse run and the convex MPC
+stair and terraced-terrain runs. Blender renders Go2 link poses recorded
+from RNE with the Go2 meshes shipped with RNE. The warehouse props visualize
+the scenario's shelves and moving discs.
 
 To tile gallery GIFs into a separate overview, use the Pillow-based script:
 
