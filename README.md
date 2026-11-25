@@ -8,7 +8,7 @@ cart-pole. Reference paths come from
 機体（車輪型・犬型・ヒューマノイド・アーム・ドローン・倒立振子）ごとに、
 合う制御則を同じタスクで比較シミュレーションするライブラリです。
 
-![robo-control hero](docs/media/hero.gif)
+![Go2 and G1 simulations on Robot Native Engine](docs/media/hero.gif)
 
 ## Gallery by robot body
 
