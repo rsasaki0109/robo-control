@@ -18,6 +18,23 @@ cart-pole. Reference paths come from
 |:---:|:---:|
 | ![3D replay of G1 recovering from a push on a ramp on RNE](docs/media/hero_g1_ramp.gif) | ![3D replay of G1 turning by footsteps on RNE](docs/media/hero_g1_turn.gif) |
 
+### Flight and mobile robots
+
+| Quadrotor | Differential-drive AMR |
+|:---:|:---:|
+| ![3D replay of quadrotor flight using LTV-MPC](docs/media/hero_drone.gif) | ![3D replay of differential-drive warehouse tracking using LTV-MPC](docs/media/hero_amr.gif) |
+
+The flight and warehouse clips replay the LTV-MPC trajectories from the
+quadrotor and AMR scenarios.
+
+| Wheeled semi-humanoid | Three-wheel omni drive | Four-module swerve drive |
+|:---:|:---:|:---:|
+| ![3D illustration of a wheeled semi-humanoid reaching with both arms](docs/media/hero_semi_humanoid.gif) | ![3D illustration of omni-wheel translation with a fixed chassis heading](docs/media/hero_omniwheel.gif) | ![3D illustration of swerve translation with independently steered wheels](docs/media/hero_swerve.gif) |
+
+These kinematic illustrations show a wheeled torso reaching with two arms,
+an omni base translating without turning its chassis, and a swerve base
+translating and rotating through independent wheel steering.
+
 ## Gallery by robot body
 
 ### Wheeled
@@ -307,7 +324,7 @@ cargo test --release -p robo-control-rne   # Go2 / G1 on RNE (first build fetche
 Everything is deterministic: fixed-step RK4 / semi-implicit Euler, no wall clock,
 seeded noise.
 
-The 3D GIFs replay Go2's holonomic MPPI warehouse run and convex MPC stair
+The RNE 3D GIFs replay Go2's holonomic MPPI warehouse run and convex MPC stair
 and terraced-terrain runs, along with G1's ramp and turning runs with DCM
 step adjustment. Blender renders link poses recorded from RNE with the
 robot meshes shipped with RNE. The warehouse props visualize the scenario's
