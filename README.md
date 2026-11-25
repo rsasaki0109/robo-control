@@ -16,26 +16,22 @@ cart-pole. Reference paths come from
 
 | Differential-drive AMR | Car |
 |:---:|:---:|
-| ![amr](docs/media/amr.gif) | ![car](docs/media/car.gif) |
 | A* -> spline -> speed profile in a warehouse; **pure pursuit / Kanayama / LQR / LTV-MPC** on a unicycle with velocity-loop lag | Fast spline circuit (up to 12 m/s) on a kinematic bicycle with steering lag; **pure pursuit / Stanley / LQR / LTV-MPC / nonlinear MPC (iLQR) / MPPI** |
 
 | Car parking with reverse |
 |:---:|
-| ![parking](docs/media/parking.gif) |
 | Hybrid A* parallel-parking plan with cusps (red = reverse) turned into a signed-speed reference; **pure pursuit with a reverse mode / LQR / LTV-MPC** |
 
 ### Legged
 
 | Quadruped (dog type) | Humanoid |
 |:---:|:---:|
-| ![quadruped](docs/media/quadruped.gif) | ![humanoid](docs/media/humanoid.gif) |
 | Trot on a sagittal single-rigid-body model, speed steps and a 24 N s backward push; **PD + force-distribution QP vs convex MPC** over one gait cycle (3D versions run the articulated Go2, below) | 3D LIPM walking, 0.35 / 0.25 m/s push mid-step; **ZMP preview control on fixed footsteps falls, DCM control with step adjustment recovers** (the same walkers drive the articulated G1, below) |
 
 ### Manipulator, aerial, balancing
 
 | Arm | Drone | Cart-pole |
 |:---:|:---:|:---:|
-| ![arm](docs/media/arm.gif) | ![drone](docs/media/drone.gif) | ![cartpole](docs/media/cartpole.gif) |
 | RRT-Connect pick-and-place with a 2 kg payload the controllers do not know; **PD / PD + gravity / computed torque** | RRT* path through a forest with a wind gust; **cascaded PID / LQR / LTV-MPC** | Swing-up from hanging and a push; **energy shaping + LQR vs iLQR + TV-LQR vs MPPI** |
 
 ```bash
@@ -53,33 +49,27 @@ the plant, robo-control decides.
 
 | Go2 (12 DoF) | G1 (12-DoF legs) |
 |:---:|:---:|
-| ![go2 on rne](docs/media/rne_go2.gif) | ![g1 on rne](docs/media/rne_g1.gif) |
 | `legged3d::PdForceQp` vs `legged3d::ConvexMpc3d` choose the stance forces, applied as `-J^T f` on RNE's `Quadruped`; swing feet land at Raibert footholds through its leg IK. 0.5 then 1.0 m/s, a 120 N back push and a 100 N side push. | `scenarios::humanoid::LipmWalker` (ZMP preview on fixed steps vs DCM step adjustment, the same walker as the point-mass scenario) drives RNE's whole-body controller (`rne_wbc`, contact cones enforced); four sole contacts per foot. |
 
 | Go2 on rough terrain | Go2 up stairs | G1 up a ramp |
 |:---:|:---:|:---:|
-| ![go2 terrain](docs/media/rne_go2_terrain.gif) | ![go2 stairs](docs/media/rne_go2_stairs.gif) | ![g1 ramp](docs/media/rne_g1_ramp.gif) |
 | Seeded fractal terrain, +-10 cm with 4 cm terraces under the path: footholds and the ride height follow the ground. | Five 8 cm steps with 30 cm treads (a 1 cm height field, so the risers are near vertical); swing apex 12 cm. | A 5 % ramp up to 6 cm, pushed mid-climb: contacts, swing heights and the CoM height follow the ground. |
 
 | Planning + control: Go2 crosses the warehouse |
 |:---:|
-| ![go2 warehouse mission](docs/media/rne_go2_mission.gif) |
-| robot-planning plans the route on its warehouse scene (A* on a grid inflated by the Go2's 0.38 m footprint, line-of-sight pruning, a spline and a speed profile capped at 0.7 m/s and 0.4 m/s^2 lateral). The Go2 is commanded the reference velocity plus position feedback, and faces along the path (heading and yaw rate from the tangent and curvature). PD + force QP (blue) vs convex MPC (orange) walk the 63 s route; both arrive on schedule, and the MPC holds tighter in the turns (max cross-track 5 cm vs 16 cm) and keeps more clearance from the shelves. |
+| robot-planning plans the route on its warehouse scene (A* on a grid inflated by the Go2's 0.38 m footprint, line-of-sight pruning, a spline and a speed profile capped at 0.7 m/s and 0.4 m/s^2 lateral). The Go2 is commanded the reference velocity plus position feedback, and faces along the path (heading and yaw rate from the tangent and curvature). PD + force QP vs convex MPC walk the 63 s route; both arrive on schedule, and the MPC holds tighter in the turns (max cross-track 5 cm vs 16 cm) and keeps more clearance from the shelves. |
 
 | G1 walks the same warehouse route |
 |:---:|
-| ![g1 warehouse mission](docs/media/rne_g1_mission.gif) |
 | The humanoid on the same A* route, slowed to a G1 speed profile (0.27 m/s, 0.08 m/s^2 lateral). `LipmWalker` now turns by footsteps: each step rotates the foot by up to 0.2 rad toward a commanded heading, and the DCM footstep and ZMP laws run in the walking frame. On RNE the swing sole, the support rectangle used to clamp the ZMP, and the pelvis attitude target all follow the feet's yaw. The walker is steered toward a point 0.6 m ahead on the route, taking its step length from the speed profile: 366 steps, no fall, 7.5 cm RMS from the route, at least 8 cm from every shelf. |
 
 | Go2 among people and a cart |
 |:---:|
-| ![go2 crowd](docs/media/rne_go2_crowd.gif) |
-| Four Go2 runs overlay the same warehouse route with two people and a cart (purple) on fixed back-and-forth routes. Blue follows the timed plan, orange uses robot-planning's DWA, green uses MPPI with a unicycle model, and red uses MPPI with independent forward and lateral body velocities. DWA tests constant-velocity arcs. Both MPPI variants sample input sequences with a 10 cm safety margin, and the holonomic variant adds a small cost for lateral commands. All three local planners predict the movers at constant velocity. The movers are kinematic discs, and contact is measured by distance. The Go2 walks with convex MPC on RNE throughout. |
+| Four Go2 runs follow the same warehouse route with two people and a cart on fixed back-and-forth routes. The comparison covers timed plan tracking, robot-planning's DWA, MPPI with a unicycle model, and MPPI with independent forward and lateral body velocities. DWA tests constant-velocity arcs. Both MPPI variants sample input sequences with a 10 cm safety margin, and the holonomic variant adds a small cost for lateral commands. All three local planners predict the movers at constant velocity. The movers are kinematic discs, and contact is measured by distance. The Go2 walks with convex MPC on RNE throughout. |
 
 | Four Go2s swapping corners |
 |:---:|
-| ![fleet](docs/media/rne_fleet.gif) |
-| Each Go2 trots with its own convex MPC on RNE; velocity commands come from robot-planning's multi-robot methods: decentralised reciprocal avoidance (left) vs prioritized space-time A* with a 0.9 m separation (right). The robots run in separate simulations, so the separation they keep is what is measured. |
+| Each Go2 trots with its own convex MPC on RNE; velocity commands come from robot-planning's multi-robot methods: decentralised reciprocal avoidance vs prioritized space-time A* with a 0.9 m separation. The robots run in separate simulations, so the separation they keep is what is measured. |
 
 ```bash
 cargo run --release -p robo-control-rne --example rne_gallery     # out/rne/{go2,g1,go2_terrain,go2_stairs,g1_ramp,fleet,go2_mission,go2_crowd,g1_mission}.gif + metrics
