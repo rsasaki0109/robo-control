@@ -12,6 +12,7 @@
 //!   (`rne_wbc` with `enforce_contact_cones`) turns them into joint torques.
 
 pub mod crowd;
+pub mod docking;
 pub mod fleet;
 pub mod g1;
 pub mod go2;

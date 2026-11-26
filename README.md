@@ -35,6 +35,38 @@ These kinematic illustrations show a wheeled torso reaching with two arms,
 an omni base translating without turning its chassis, and a swerve base
 translating and rotating through independent wheel steering.
 
+### Sideways docking on RNE
+
+![3D side-by-side replay of omni and swerve docking](docs/media/rne_wheel_docking.gif)
+
+Both bases follow the same L-shaped reference at 0.5 m/s, with the chassis
+heading fixed at zero. They drive forward 1 m, then translate sideways 2 m
+into a 0.80 m wide bay. The clearance measurement uses a shared 0.66 m square
+footprint and a conservative projection at the bay entrance.
+
+| Drive | Arrival (s) | RMS path error (m) | Max heading error (°) | Min bay clearance (m) | RMS driven slip (m/s) | RMS lateral tire slip (m/s) | Steering settle (s) |
+|:---|---:|---:|---:|---:|---:|---:|---:|
+| Three-wheel omni | 9.066 | 0.0688 | 0.06 | 0.0273 | 0.0842 | — | — |
+| Four-module swerve | 7.360 | 0.0181 | 0.00 | 0.0694 | 0.0758 | 0.0166 | 0.378 |
+
+RNE integrates the planar chassis under the forces and moments from the wheel
+model. The model uses equal fixed wheel loads, capped linear tire forces and
+free lateral rollers for omni, with the same chassis inertia, total drive
+torque and nominal grip for both layouts. Bay overlap is measured geometrically.
+The replay visualizes the recorded chassis and wheel poses. The benchmark
+abstracts the individual roller contacts and uses a rate limit for steering.
+
+Path error and slip use the same six-second reference window. Arrival is the
+start of a 0.25 s hold within 3 cm of the goal, below 0.04 m/s, within 3° of the
+target heading and below 0.05 rad/s. Steering settle is the start of a 0.1 s
+interval with all module axes within 5° of their commands, measured from the
+sideways command. Omni's passive roller direction is excluded from the slip
+comparison. These results apply to the stated maneuver and wheel model.
+
+```bash
+cargo run --release -p robo-control-rne --example wheel_docking > docking.csv
+```
+
 ## Gallery by robot body
 
 ### Wheeled
