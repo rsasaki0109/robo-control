@@ -123,8 +123,35 @@ fn wheel_velocity(position: Vector2<f64>, velocity: Vector2<f64>, omega: f64) ->
     velocity + omega * Vector2::new(-position.y, position.x)
 }
 
-/// Runs the same fixed-yaw trajectory with either wheel layout.
+/// Conditions for one repeat of the fixed-yaw trajectory.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DockingConditions {
+    /// Initial displacement along X, across the bay opening [m].
+    pub start_offset_m: f64,
+    /// Coulomb cap coefficient for the wheel force.
+    pub friction: f64,
+}
+
+impl Default for DockingConditions {
+    fn default() -> Self {
+        Self {
+            start_offset_m: 0.0,
+            friction: 0.75,
+        }
+    }
+}
+
+/// Runs the default fixed-yaw trajectory with either wheel layout.
 pub fn dock(drive: Drive) -> DockingRun {
+    dock_with(drive, DockingConditions::default())
+}
+
+/// Runs the fixed-yaw trajectory with a displaced start and changed grip.
+///
+/// Panics if either condition is non-finite or friction is negative.
+pub fn dock_with(drive: Drive, conditions: DockingConditions) -> DockingRun {
+    assert!(conditions.start_offset_m.is_finite());
+    assert!(conditions.friction.is_finite() && conditions.friction >= 0.0);
     let swerve = drive == Drive::Swerve;
     let layout: Vec<_> = if swerve {
         [(-0.23, -0.23), (-0.23, 0.23), (0.23, -0.23), (0.23, 0.23)]
@@ -153,9 +180,9 @@ pub fn dock(drive: Drive) -> DockingRun {
     let max_torque = 4.8 / count;
     let motor_gain = 0.68 / count;
     let wheel_inertia = 0.02 / count;
-    let grip = 0.75 * MASS * 9.81 / count;
+    let grip = conditions.friction * MASS * 9.81 / count;
     let model = chassis();
-    let mut q = vec![-1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let mut q = vec![-1.0 + conditions.start_offset_m, 0.0, 0.0, 0.0, 0.0, 0.0];
     let mut qd = [0.0; 6];
     let mut frames = Vec::new();
     let mut min_clearance = f64::INFINITY;

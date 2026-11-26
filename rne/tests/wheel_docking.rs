@@ -1,4 +1,4 @@
-use robo_control_rne::docking::{dock, Drive};
+use robo_control_rne::docking::{dock, dock_with, DockingConditions, Drive};
 
 #[test]
 fn both_wheel_layouts_dock_sideways_with_fixed_heading() {
@@ -20,4 +20,32 @@ fn both_wheel_layouts_dock_sideways_with_fixed_heading() {
             }
         }
     }
+}
+
+#[test]
+fn displaced_start_and_wheel_grip_affect_docking() {
+    let conditions = DockingConditions {
+        start_offset_m: -0.05,
+        friction: 0.25,
+    };
+    let low_grip = dock_with(Drive::Omni, conditions);
+    let nominal_grip = dock_with(
+        Drive::Omni,
+        DockingConditions {
+            friction: 0.75,
+            ..conditions
+        },
+    );
+    assert!((low_grip.frames[0].xy[0] + 1.05).abs() < 1e-12);
+    assert!(low_grip.arrival_s.is_some());
+    assert!(low_grip.min_clearance_m < nominal_grip.min_clearance_m);
+    let no_grip = dock_with(
+        Drive::Swerve,
+        DockingConditions {
+            friction: 0.0,
+            ..conditions
+        },
+    );
+    assert!(no_grip.arrival_s.is_none());
+    assert_eq!(no_grip.frames.first().unwrap().xy, no_grip.frames.last().unwrap().xy);
 }

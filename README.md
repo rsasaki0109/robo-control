@@ -67,6 +67,37 @@ comparison. These results apply to the stated maneuver and wheel model.
 cargo run --release -p robo-control-rne --example wheel_docking > docking.csv
 ```
 
+#### Start offset and floor grip
+
+![3D docking replay at nominal grip and at the condition with the largest clearance gap](docs/media/rne_wheel_docking_grip.gif)
+
+The sweep shifts the initial chassis X coordinate by −5, 0 or +5 cm, across
+the bay opening, with the same reference and controller. Three friction
+coefficients change the cap on wheel force. Both drives docked without
+geometric overlap in **9/9** cases within the 10 s simulation.
+
+| Friction coefficient | Initial X offset (cm) | Omni arrival (s) | Omni min gap (cm) | Swerve arrival (s) | Swerve min gap (cm) |
+|---:|---:|---:|---:|---:|---:|
+| 0.75 | -5 | 9.064 | 2.57 | 7.360 | 6.94 |
+| 0.75 | 0 | 9.066 | 2.73 | 7.360 | 6.94 |
+| 0.75 | +5 | 9.068 | 2.80 | 7.360 | 6.94 |
+| 0.45 | -5 | 9.064 | 2.57 | 7.360 | 6.94 |
+| 0.45 | 0 | 9.066 | 2.73 | 7.360 | 6.94 |
+| 0.45 | +5 | 9.068 | 2.80 | 7.360 | 6.94 |
+| 0.25 | -5 | 9.052 | 2.38 | 7.360 | 6.94 |
+| 0.25 | 0 | 9.058 | 2.56 | 7.360 | 6.94 |
+| 0.25 | +5 | 9.060 | 2.64 | 7.360 | 6.94 |
+
+The largest clearance difference was **4.56 cm** at −5 cm and 0.25 friction,
+compared with **4.21 cm** in the nominal case. At −5 cm, reducing friction
+from 0.75 to 0.25 reduced the omni's clearance from 2.57 to 2.38 cm, while
+the swerve's clearance stayed at 6.94 cm to the reported precision.
+
+```bash
+cargo run --release -p robo-control-rne --example wheel_docking -- --sweep > docking_sweep.csv
+cargo run --release -p robo-control-rne --example wheel_docking -- --case -0.05 0.25 > docking_low_grip.csv
+```
+
 ## Gallery by robot body
 
 ### Wheeled
